@@ -107,9 +107,14 @@ ARCHITECTURE §6bj; `room/recording.go`, `signal/recording.go` (`OpRecording` 0x
 Also fixed: the one-to-one call chat showed the wrong log (`renderChatTo` now redraws; the call peer is chosen before the roster), and the SFU test port helper. Older harnesses rerun and passing: whiteboard, call, controls, notes, qna, mute, share, live, messaging.
 The recording e2e needs an administrator: a fresh server started with `-admin-email/-admin-password`, the same in `AETHER_ADMIN_EMAIL/AETHER_ADMIN_PASSWORD`. "Recording allowed" is off by default.
 
+## Batch 13 — done: video effects
+
+ARCHITECTURE §6bk; `web/src/effects.js` (+ `effects.test.mjs`), `web/vendor/mediapipe` (Apache-2.0), effects panel / pre-join sheet / `camTrackFor` in `app.js`, `tools/e2e/effects.e2e.mjs`, `tools/e2e/measure-effects.mjs`. `AETHER_E2E_GPU=1` runs the harness with the GPU on.
+
 ## Next, in order
 
-1. Video effects/background blur, together mode.
+1. Quality-targeted camera encoding (§6bk finding: the socket path's VP8 spends its 600 kbit/s target on a flat background too; measure `bitrateMode: 'quantizer'` against it, and the WebRTC path). Probed on Chrome 156: quantizer mode is supported for VP9 and AV1, NOT for VP8, so this means the socket camera moves to VP9 with the codec signalled to receivers, then a WebGL/worker effects compositor (the GPU read-back is most of a segmentation).
+2. Together mode.
 2. Beyond meetings: teams as containers above channels, activity feed, calendar views + scheduling assistant, remaining chat items (see TEAMS_PARITY "Not built" rows).
 
 ## How to run things

@@ -261,8 +261,18 @@ const SCREENS = [
     },
   },
   {
+    // The pre-join's "Background filters": the effects picker as a sheet.
+    name: 'prejoin-effects',
+    go: async (page) => {
+      await page.evaluate(() => document.getElementById('pj-fx')?.click());
+      await sleep(700);
+    },
+  },
+  {
     name: 'stage',
     go: async (page) => {
+      await page.evaluate(() => document.querySelector('#fx-sheet [data-yes]')?.click());
+      await sleep(200);
       await page.evaluate(() => document.getElementById('pj-join')?.click());
       await page.waitForFunction(() => getComputedStyle(document.getElementById('app')).display !== 'none', { timeout: 20000 });
       await sleep(1500);
@@ -368,6 +378,25 @@ const SCREENS = [
     go: async (page) => {
       await page.evaluate(() => document.getElementById('wb-close')?.click());
       await sleep(500);
+    },
+  },
+  {
+    // Camera > Video effects: the panel, with Standard blur on.
+    name: 'effects',
+    go: async (page) => {
+      await page.evaluate(() => { document.getElementById('btn-cam-more')?.click(); document.getElementById('cam-effects')?.click(); });
+      await sleep(600);
+      await page.evaluate(() => [...document.querySelectorAll('#view-effects .fx-tile')].find((t) => t.title === 'Standard blur')?.click());
+      await sleep(2500);
+    },
+  },
+  {
+    name: 'effects-off',
+    go: async (page) => {
+      await page.evaluate(() => [...document.querySelectorAll('#view-effects .fx-tile')].find((t) => t.title === 'None')?.click());
+      await sleep(600);
+      await page.evaluate(() => document.getElementById('side-close')?.click());
+      await sleep(300);
     },
   },
   {

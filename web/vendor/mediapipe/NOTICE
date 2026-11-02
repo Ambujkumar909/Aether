@@ -1,0 +1,4 @@
+MediaPipe Tasks Vision 1.1.1 (npm @mediapipe/tasks-vision), Apache-2.0, Copyright Google LLC.
+Files: vision_bundle.mjs, vision_wasm_internal.js, vision_wasm_internal.wasm (the SIMD build).
+Model: selfie_segmenter.tflite (float16, 256x256), from
+https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite

@@ -6666,18 +6666,18 @@ h2 .who-link { font: inherit; }
    the visible 20 px mark is drawn inside it, and a negative margin keeps the
    text aligned with the mark rather than with the hit area. */
 @media (pointer: coarse) {
-  .pj-check input[type="checkbox"], .ap-nc input[type="radio"], .history-choice input[type="radio"], .br-radio input[type="radio"] {
+  .pj-check input[type="checkbox"], .fx-switch input[type="checkbox"], .ap-nc input[type="radio"], .history-choice input[type="radio"], .br-radio input[type="radio"] {
     appearance: none; -webkit-appearance: none; position: relative;
     width: 44px; height: 44px; margin: -12px; flex: none; cursor: pointer;
     background: none; border: 0; border-radius: 8px;
   }
-  .pj-check input[type="checkbox"]::before, .ap-nc input[type="radio"]::before, .history-choice input[type="radio"]::before, .br-radio input[type="radio"]::before {
+  .pj-check input[type="checkbox"]::before, .fx-switch input[type="checkbox"]::before, .ap-nc input[type="radio"]::before, .history-choice input[type="radio"]::before, .br-radio input[type="radio"]::before {
     content: ''; position: absolute; inset: 12px; box-sizing: border-box;
     border: 2px solid var(--line-strong); border-radius: 5px; background: var(--card);
   }
   .ap-nc input[type="radio"]::before, .history-choice input[type="radio"]::before, .br-radio input[type="radio"]::before { border-radius: 50%; }
-  .pj-check input[type="checkbox"]:checked::before { background: var(--brand); border-color: var(--brand); }
-  .pj-check input[type="checkbox"]:checked::after {
+  .pj-check input[type="checkbox"]:checked::before, .fx-switch input[type="checkbox"]:checked::before { background: var(--brand); border-color: var(--brand); }
+  .pj-check input[type="checkbox"]:checked::after, .fx-switch input[type="checkbox"]:checked::after {
     content: ''; position: absolute; left: 18px; top: 15px; width: 6px; height: 11px;
     border: solid var(--brand-ink); border-width: 0 2px 2px 0; transform: rotate(45deg);
   }
@@ -6685,10 +6685,10 @@ h2 .who-link { font: inherit; }
   .ap-nc input[type="radio"]:checked::after, .history-choice input[type="radio"]:checked::after, .br-radio input[type="radio"]:checked::after {
     content: ''; position: absolute; inset: 17px; border-radius: 50%; background: var(--brand);
   }
-  .pj-check input[type="checkbox"]:focus-visible, .ap-nc input[type="radio"]:focus-visible, .history-choice input[type="radio"]:focus-visible, .br-radio input[type="radio"]:focus-visible {
+  .pj-check input[type="checkbox"]:focus-visible, .fx-switch input[type="checkbox"]:focus-visible, .ap-nc input[type="radio"]:focus-visible, .history-choice input[type="radio"]:focus-visible, .br-radio input[type="radio"]:focus-visible {
     outline: 2px solid var(--brand); outline-offset: -8px;
   }
-  .pj-check input[type="checkbox"]:disabled, .ap-nc input[type="radio"]:disabled, .history-choice input[type="radio"]:disabled, .br-radio input[type="radio"]:disabled { opacity: 0.45; }
+  .pj-check input[type="checkbox"]:disabled, .fx-switch input[type="checkbox"]:disabled, .ap-nc input[type="radio"]:disabled, .history-choice input[type="radio"]:disabled, .br-radio input[type="radio"]:disabled { opacity: 0.45; }
   .pj-check { gap: 14px; }
 }
 
@@ -7314,4 +7314,61 @@ h2 .who-link { font: inherit; }
 }
 @media (max-width: 720px) {
   .rec-banner { top: 8px; }
+}
+
+/* ------------------------------ Video effects ------------------------------ */
+
+/* The pre-join's "Background filters", beside the mic and camera toggles. */
+.pj-controls .pj-fx {
+  width: auto; min-height: 46px; padding: 0 14px; flex-direction: row; justify-content: center;
+  border: 0; border-radius: var(--r-md); background: rgba(0, 0, 0, 0.55); color: #fff;
+  font: inherit; font-size: var(--t-small); font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.pj-controls .pj-fx:hover { background: rgba(0, 0, 0, 0.7); }
+#pj-video.unmirrored { transform: none; }
+
+#view-effects.active { overflow-y: auto; }
+.fx-body { padding: 12px 14px 20px; display: grid; gap: 10px; }
+.fx-preview { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+.fx-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fx-preview.mirror video { transform: scaleX(-1); }
+.fx-preview-off { position: absolute; inset: 0; display: none; place-items: center; color: var(--ink-3); font-size: var(--t-small); }
+.fx-preview.off video { display: none; }
+.fx-preview.off .fx-preview-off { display: grid; }
+.fx-status { margin: 0; font-size: var(--t-small); color: var(--ink-2); }
+.fx-h { margin: 6px 0 0; font-size: var(--t-small); font-weight: 600; color: var(--ink-2); }
+.fx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.fx-tile {
+  position: relative; display: grid; gap: 4px; justify-items: center; padding: 6px; min-height: 44px;
+  border: 2px solid transparent; border-radius: var(--r-md); background: var(--surface); color: var(--ink);
+  font: inherit; cursor: pointer; text-align: center;
+}
+.fx-tile.on { border-color: var(--brand); }
+.fx-tile:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.fx-tile-label { font-size: var(--t-label, 11px); color: var(--ink-2); line-height: 1.2; }
+.fx-ico { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r-sm); display: block; object-fit: cover; background: var(--card); }
+.fx-none { background: var(--card); box-shadow: inset 0 0 0 1px var(--line); position: relative; }
+.fx-none::after { content: ""; position: absolute; left: 20%; right: 20%; top: 50%; height: 2px; background: var(--ink-3); transform: rotate(-20deg); }
+/* A head against a softened field: one flat circle, no gradients. */
+.fx-blur, .fx-portrait { position: relative; overflow: hidden; background: var(--line); }
+.fx-blur::after, .fx-portrait::after {
+  content: ""; position: absolute; left: 50%; top: 22%; width: 36%; aspect-ratio: 1; transform: translateX(-50%);
+  border-radius: 50%; background: var(--ink-3); box-shadow: 0 0 0 3px var(--card);
+}
+.fx-portrait::after { background: var(--ink-2); box-shadow: 0 0 0 6px var(--card); }
+.fx-plus { display: grid; place-items: center; font-size: 22px; color: var(--ink-2); box-shadow: inset 0 0 0 1px dashed var(--line); }
+.fx-mine { position: relative; display: grid; }
+.fx-remove {
+  position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 16px; line-height: 1; cursor: pointer;
+}
+.fx-note { margin: 0; font-size: var(--t-small); color: var(--ink-3); }
+.fx-switch { display: flex; align-items: center; gap: 10px; min-height: 40px; cursor: pointer; }
+.fx-switch input { accent-color: var(--brand); }
+.fx-sheet { width: min(560px, 100%); }
+.fx-sheet .fx-body { padding: 0; }
+
+@media (pointer: coarse) {
+  .fx-switch { min-height: 44px; }
+  .fx-remove { width: 44px; height: 44px; top: -6px; right: -6px; }
 }

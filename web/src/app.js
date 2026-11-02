@@ -60,6 +60,7 @@ import {
   visibleLines,
 } from './captions.js';
 import { directory, messaging, qna, notes, transcript as transcriptApi } from './api.js';
+import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, loadSettings as loadFx, saveSettings as saveFx, normalize as normalizeFx, needsPipeline as fxNeedsPipeline, listImages as fxListImages, addImage as fxAddImage, removeImage as fxRemoveImage } from './effects.js';
 import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as recBanner, elapsed as recElapsed, pickMime, ChunkSink, fileName as recFileName, WHAT as REC } from './recording.js';
 import { WSMediaSender, WSMediaReceiver, wsMediaSupported } from './wsmedia.js';
 import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence } from './chat.js';
@@ -285,6 +286,12 @@ const state = {
   // the server last said it; this meeting session (the room's epoch); this
   // speaker's consent to have their speech turned into text (null: not yet
   // asked); the utterance being spoken; the recording made on this machine.
+  // Video effects (effects.js): the chosen effects, kept on this device; the
+  // running pipeline, if any; your own background images, decoded.
+  fx: loadFx(),
+  fxPipe: null,
+  fxStatus: 'none',
+  fxImages: new Map(),
   rec: { recording: false, transcribing: false, captions: false, recBy: '', recSince: 0, trBy: '', trSince: 0 },
   session: 0,
   speechConsent: null,
@@ -914,7 +921,7 @@ async function startMedia() {
     const v = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
     });
-    v.getVideoTracks().forEach((t) => state.localStream.addTrack(t));
+    for (const t of v.getVideoTracks()) state.localStream.addTrack(await camTrackFor(t));
   } catch (err) {
     console.warn('camera unavailable:', err.name, err.message);
     state.cam = false;
@@ -2653,6 +2660,196 @@ function drawComposite(g, W, H) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Video effects (effects.js)
+//
+// The camera's track passes through camTrackFor wherever it is acquired, as
+// the microphone passes through micTrackFor. With no effect it is returned as
+// it is: no pipeline, no cost. With one, the published track is the
+// pipeline's canvas, and stopping that track stops the pipeline and the
+// camera behind it -- so every place that turns the camera off (and turns its
+// light off) needs no knowledge of effects.
+// ---------------------------------------------------------------------------
+
+async function loadFxImages() {
+  const want = state.fx.background === 'image' && state.fx.image.startsWith('img-') ? state.fx.image : '';
+  if (!want || state.fxImages.has(want)) return;
+  const rec = (await fxListImages()).find((r) => r.id === want);
+  if (rec) state.fxImages.set(want, await createImageBitmap(rec.blob));
+}
+
+async function camTrackFor(raw) {
+  if (!raw || !fxNeedsPipeline(state.fx)) {
+    markFx();
+    return raw;
+  }
+  await loadFxImages().catch(() => {});
+  state.fxStatus = 'none';
+  const pipe = new EffectsPipeline(raw, state.fx, { images: state.fxImages, onStatus: onFxStatus });
+  const out = pipe.track;
+  const stopOut = out.stop.bind(out);
+  // Releasing hands the camera back without stopping it ("None" chosen).
+  out.release = () => {
+    stopOut();
+    pipe.stop();
+    if (state.fxPipe === pipe) state.fxPipe = null;
+    markFx();
+    return raw;
+  };
+  out.stop = () => {
+    out.release();
+    raw.stop();
+  };
+  state.fxPipe = pipe;
+  markFx();
+  return out;
+}
+
+// What is running, for the person's panel and for the live checks:
+// data-fx="off" | "<background>:<segmenter status>".
+function markFx() {
+  document.documentElement.dataset.fx = state.fxPipe ? `${state.fx.background}:${state.fxStatus}` : 'off';
+}
+
+function onFxStatus(status) {
+  state.fxStatus = status;
+  markFx();
+  if (status === 'failed') toast("Background effects aren't available on this device. Your background stays blurred.", 'bad');
+  if (state.sideView === 'effects') renderEffects($('view-effects'));
+}
+
+// Swap the published camera track: the stream, the WebRTC sender, the socket
+// encoder, the pre-join preview. While a screen is shared the sender carries
+// the screen; the camera is picked up from the stream when sharing stops.
+async function publishCam(oldT, newT) {
+  const ls = state.localStream;
+  if (!ls) return;
+  ls.removeTrack(oldT);
+  ls.addTrack(newT);
+  if (!state.sharing && state.room && state.media) await state.media.ensureVideo(newT);
+  if (!state.sharing && state.wsMediaOn && state.wsSender) await state.wsSender.setVideoTrack(newT);
+  const pv = $('pj-video');
+  if (pv && pv.srcObject === ls) pv.srcObject = ls;
+  renderStage();
+}
+
+async function applyEffects(next) {
+  state.fx = normalizeFx(next);
+  saveFx(state.fx);
+  await loadFxImages().catch(() => {});
+  const cur = state.localStream?.getVideoTracks()[0];
+  if (cur && cur.readyState === 'live') {
+    const pipe = state.fxPipe;
+    if (pipe && cur === pipe.track) {
+      if (fxNeedsPipeline(state.fx)) pipe.set(state.fx);
+      else await publishCam(cur, cur.release());
+    } else if (fxNeedsPipeline(state.fx)) {
+      await publishCam(cur, await camTrackFor(cur));
+    }
+  }
+  markFx();
+  if (state.sideView === 'effects') renderEffects($('view-effects'));
+  if ($('fx-sheet')) renderEffects($('fx-sheet-body'));
+}
+
+// The picker, in the meeting's side panel and in the pre-join's sheet.
+async function renderEffects(host) {
+  if (!host) return;
+  const fx = state.fx;
+  const mine = await fxListImages();
+  const tile = (id, label, inner, on, extra = '') =>
+    `<button type="button" class="fx-tile${on ? ' on' : ''}" data-fx="${id}" aria-pressed="${on}" title="${esc(label)}">${inner}<span class="fx-tile-label">${esc(label)}</span></button>${extra}`;
+  const bg = fx.background;
+  const status =
+    fx.background === 'none' ? '' : state.fxStatus === 'loading' ? 'Getting background effects ready… your background is blurred until then.' : state.fxStatus === 'failed' ? "Background effects aren't available on this device. Your background stays blurred." : '';
+  host.innerHTML = `
+    <div class="fx-body">
+      <div class="fx-preview${state.mirrorSelf ? ' mirror' : ''}"><video muted autoplay playsinline></video><span class="fx-preview-off">Camera is off</span></div>
+      ${status ? `<p class="fx-status">${esc(status)}</p>` : ''}
+      <h3 class="fx-h">Background effects</h3>
+      <div class="fx-grid" role="group" aria-label="Background effects">
+        ${tile('none', 'None', '<span class="fx-ico fx-none"></span>', bg === 'none')}
+        ${tile('blur', 'Standard blur', '<span class="fx-ico fx-blur"></span>', bg === 'blur')}
+        ${tile('portrait', 'Portrait blur', '<span class="fx-ico fx-portrait"></span>', bg === 'portrait')}
+        ${FX_PRESETS.map((p) => tile(`preset:${p.id}`, p.label, `<span class="fx-ico" style="background:${p.color}"></span>`, bg === 'image' && fx.image === p.id)).join('')}
+        ${mine
+          .map((r) => {
+            const url = URL.createObjectURL(r.blob);
+            return `<span class="fx-mine">${tile(`image:${r.id}`, 'Your image', `<img class="fx-ico" alt="" src="${url}">`, bg === 'image' && fx.image === r.id)}<button type="button" class="fx-remove" data-remove="${r.id}" aria-label="Remove this image">&times;</button></span>`;
+          })
+          .join('')}
+        ${mine.length < FX_MAX_IMAGES ? `<label class="fx-tile fx-add" title="Add new"><input type="file" accept="image/png,image/jpeg,image/webp" hidden data-add><span class="fx-ico fx-plus" aria-hidden="true">+</span><span class="fx-tile-label">Add new</span></label>` : ''}
+      </div>
+      <p class="fx-note">Your images stay on this device. They are never uploaded.</p>
+      <h3 class="fx-h">Filters</h3>
+      <label class="fx-switch"><input type="checkbox" data-filter="softFocus"${fx.softFocus ? ' checked' : ''}><span>Soft focus</span></label>
+      <label class="fx-switch"><input type="checkbox" data-filter="brightness"${fx.brightness ? ' checked' : ''}><span>Adjust brightness</span></label>
+      <h3 class="fx-h">Your view</h3>
+      <label class="fx-switch"><input type="checkbox" data-mirror${state.mirrorSelf ? ' checked' : ''}><span>Mirror my video</span></label>
+      <p class="fx-note">Only you see yourself mirrored. Others always see you the right way round.</p>
+    </div>`;
+  const pv = host.querySelector('.fx-preview video');
+  const cam = state.localStream?.getVideoTracks()[0];
+  if (cam && cam.readyState === 'live') pv.srcObject = new MediaStream([cam]);
+  host.querySelector('.fx-preview').classList.toggle('off', !(cam && cam.readyState === 'live'));
+  host.querySelectorAll('[data-fx]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const v = b.dataset.fx;
+      if (v.startsWith('preset:')) applyEffects({ ...state.fx, background: 'image', image: v.slice(7) });
+      else if (v.startsWith('image:')) applyEffects({ ...state.fx, background: 'image', image: v.slice(6) });
+      else applyEffects({ ...state.fx, background: v, image: '' });
+    })
+  );
+  host.querySelectorAll('[data-filter]').forEach((c) =>
+    c.addEventListener('change', () => applyEffects({ ...state.fx, [c.dataset.filter]: c.checked }))
+  );
+  host.querySelector('[data-mirror]')?.addEventListener('change', (e) => {
+    state.mirrorSelf = e.target.checked;
+    writePref('aether.mirror', state.mirrorSelf);
+    host.querySelector('.fx-preview').classList.toggle('mirror', state.mirrorSelf);
+    $('pj-video')?.classList.toggle('unmirrored', !state.mirrorSelf);
+    renderStage();
+  });
+  host.querySelector('[data-add]')?.addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const rec = await fxAddImage(f);
+      await applyEffects({ ...state.fx, background: 'image', image: rec.id });
+    } catch (err) {
+      toast(err?.message ?? 'Could not add that image.', 'bad');
+    }
+  });
+  host.querySelectorAll('[data-remove]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const id = b.dataset.remove;
+      await fxRemoveImage(id);
+      state.fxImages.get(id)?.close?.();
+      state.fxImages.delete(id);
+      if (state.fx.image === id) await applyEffects({ ...state.fx, background: 'none', image: '' });
+      else renderEffects(host);
+    })
+  );
+}
+
+// The pre-join's "Background filters": the same picker, as a sheet.
+function openEffectsSheet() {
+  const host = $('dialog');
+  if (!host || !host.classList.contains('hidden')) return;
+  host.innerHTML = `
+    <div class="dialog-card fx-sheet" id="fx-sheet" role="dialog" aria-labelledby="fx-sheet-title">
+      <h2 id="fx-sheet-title">Background filters</h2>
+      <div id="fx-sheet-body"></div>
+      <div class="dialog-actions"><span class="spacer"></span><button type="button" class="btn btn-primary" data-yes>Done</button></div>
+    </div>`;
+  host.classList.remove('hidden');
+  renderEffects($('fx-sheet-body'));
+  host.querySelector('[data-yes]').onclick = () => {
+    host.classList.add('hidden');
+    host.innerHTML = '';
+  };
+}
+
 // The transcript panel: the session's lines, live while it is transcribed.
 const transcriptState = { lines: [], loaded: false, loading: false, error: '' };
 
@@ -3371,7 +3568,8 @@ function setSide(view) {
     v.classList.toggle('active', v.id === `view-${view}`)
   );
   $('composer').classList.toggle('hidden', view !== 'chat');
-  $('side-title').textContent = { chat: 'Meeting chat', rooms: 'Breakout rooms', qna: 'Q&A', health: 'Call health', notes: 'Meeting notes', transcript: 'Transcript' }[view] ?? 'People';
+  $('side-title').textContent = { chat: 'Meeting chat', rooms: 'Breakout rooms', qna: 'Q&A', health: 'Call health', notes: 'Meeting notes', transcript: 'Transcript', effects: 'Video effects' }[view] ?? 'People';
+  if (view === 'effects') renderEffects($('view-effects'));
   if (view === 'transcript') {
     if (transcriptState.loaded) renderTranscript();
     else loadTranscript();
@@ -3497,6 +3695,15 @@ function wireMeetingMenus() {
   $('more-tr').onclick = () => {
     $('more-pop').hidden = true;
     toggleTranscription();
+  };
+  $('more-effects').onclick = () => {
+    $('more-pop').hidden = true;
+    setSide('effects');
+  };
+  wireMenu('btn-cam-more', 'cam-pop');
+  $('cam-effects').onclick = () => {
+    $('cam-pop').hidden = true;
+    setSide('effects');
   };
   $('more-transcript').onclick = () => {
     $('more-pop').hidden = true;
@@ -3954,8 +4161,9 @@ async function restartCamera() {
     const fresh = await navigator.mediaDevices.getUserMedia({
       video: state.videoConstraints ?? true,
     });
-    const t = fresh.getVideoTracks()[0];
-    if (!t) return;
+    const camRaw = fresh.getVideoTracks()[0];
+    if (!camRaw) return;
+    const t = await camTrackFor(camRaw);
     if (!state.localStream) state.localStream = new MediaStream();
     state.localStream.addTrack(t);
     // ensureVideo covers the case where there was never a camera to begin
@@ -4696,7 +4904,7 @@ async function acquirePreviewNow() {
           ? { deviceId: { exact: state.camDeviceId } }
           : { width: { ideal: 1280 }, height: { ideal: 720 } },
       });
-      v.getVideoTracks().forEach((t) => stream.addTrack(t));
+      for (const t of v.getVideoTracks()) stream.addTrack(await camTrackFor(t));
     } catch (err) {
       notes.push('Camera unavailable — you can still be heard and share your screen.');
       state.cam = false;
@@ -4751,6 +4959,7 @@ function syncPreJoinControls() {
   $('pj-cam').classList.toggle('off', !state.cam);
   const live = state.cam && !!pj.stream?.getVideoTracks().length;
   $('pj-video').classList.toggle('hidden', !live);
+  $('pj-video').classList.toggle('unmirrored', !state.mirrorSelf);
   $('pj-off').classList.toggle('hidden', live);
 }
 
@@ -4852,6 +5061,7 @@ function wirePreJoin() {
       $('pj-join').disabled = false;
     }
   };
+  $('pj-fx').onclick = () => openEffectsSheet();
   $('pj-back').onclick = () => {
     stopPreview();
     pj.stream?.getTracks().forEach((t) => t.stop());
@@ -7627,7 +7837,7 @@ function screenTrackIds() {
 async function deviceLabels() {
   // The device, not the noise suppressor's output track that is published.
   const mic = state.denoiser?.raw?.label || state.localStream?.getAudioTracks?.()[0]?.label || '—';
-  const cam = state.localStream?.getVideoTracks?.()[0]?.label || '—';
+  const cam = state.fxPipe?.raw?.label || state.localStream?.getVideoTracks?.()[0]?.label || '—';
   let speaker = 'Default';
   try {
     if (state.speakerId) {

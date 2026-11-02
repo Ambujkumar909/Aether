@@ -50,7 +50,9 @@ export async function launch() {
   return puppeteer.launch({
     executablePath: CHROME,
     headless: true,
-    args: ['--ignore-certificate-errors', '--no-first-run', '--disable-gpu', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+    // AETHER_E2E_GPU=1 keeps the GPU on, to measure what a real machine pays
+    // (video effects); by default it is off, as in CI.
+    args: ['--ignore-certificate-errors', '--no-first-run', ...(process.env.AETHER_E2E_GPU ? ['--enable-gpu', '--use-angle=d3d11', '--ignore-gpu-blocklist'] : ['--disable-gpu']), '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
 }
 

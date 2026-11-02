@@ -233,6 +233,7 @@
             <button class="ctl" id="pj-cam" title="Camera">
               <svg width="20" height="20" viewBox="0 0 24 24"><use href="#i-cam" /></svg>
             </button>
+            <button class="ctl pj-fx" id="pj-fx" type="button" title="Background filters">Background filters</button>
           </div>
           <div class="pj-meter" title="Microphone level">
             <span id="pj-level"></span>
@@ -376,6 +377,7 @@
                 <button role="menuitem" id="more-transcript">Show transcript</button>
                 <button role="menuitem" class="ctl" id="btn-cc"><span class="ctl-label" id="cc-label">Turn on live captions</span></button>
                 <button role="menuitem" id="more-audio">Audio settings</button>
+                <button role="menuitem" id="more-effects">Video effects</button>
                 <button role="menuitem" id="more-options" hidden>Meeting options</button>
                 <button role="menuitem" id="more-health">Call health</button>
                 <!-- On a phone the top row keeps Chat, People, Raise, React,
@@ -390,10 +392,18 @@
           </div>
 
           <div class="mb-devices" role="toolbar" aria-label="Devices">
-            <button class="ctl mb-btn" id="btn-cam">
-              <span class="ctl-btn"><svg width="20" height="20" viewBox="0 0 24 24"><use href="#i-cam" id="cam-icon" /></svg></span>
-              <span class="ctl-label">Camera</span>
-            </button>
+            <div class="mb-split" id="cam-menu">
+              <button class="ctl mb-btn" id="btn-cam">
+                <span class="ctl-btn"><svg width="20" height="20" viewBox="0 0 24 24"><use href="#i-cam" id="cam-icon" /></svg></span>
+                <span class="ctl-label">Camera</span>
+              </button>
+              <button class="mb-caret" type="button" id="btn-cam-more" aria-haspopup="menu" aria-expanded="false" title="Video effects and settings">
+                <svg width="14" height="14" viewBox="0 0 24 24"><use href="#i-chevron" /></svg>
+              </button>
+              <div class="mb-pop" id="cam-pop" role="menu" hidden>
+                <button role="menuitem" id="cam-effects">Video effects<small>Blur or replace your background, filters</small></button>
+              </div>
+            </div>
             <div class="mb-split audio-menu" id="audio-menu">
               <button class="ctl mb-btn" id="btn-mic">
                 <span class="ctl-btn"><svg width="20" height="20" viewBox="0 0 24 24"><use href="#i-mic" id="mic-icon" /></svg></span>
@@ -515,6 +525,8 @@
               <section class="side-view" id="view-notes"></section>
 
               <section class="side-view" id="view-transcript"></section>
+
+              <section class="side-view" id="view-effects"></section>
 
             </div>
 

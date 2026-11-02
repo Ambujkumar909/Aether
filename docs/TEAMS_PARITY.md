@@ -131,7 +131,8 @@ ecosystem.
 | Call health | Built | Network / Audio / Video / Screen Sharing / devices, Teams' rows; WebRTC from getStats, WebSocket path says what it cannot measure; §6bg |
 | Webinars, town halls, registration | Not built | Events tier |
 | Audio conferencing / PSTN / voicemail / call queues | N/A | Telephony carrier integration |
-| Custom backgrounds, video effects, meeting themes | Not built | |
+| Custom backgrounds, video effects | Built | Camera > Video effects and pre-join "Background filters": None, Standard blur, Portrait blur, backgrounds, Add new (kept on the device, never uploaded), Soft focus, Adjust brightness, Mirror my video; segmentation on the device (MediaPipe); a background asked to be hidden is never sent unblurred; §6bk. Animated backgrounds, avatars: not built |
+| Meeting themes | Not built | |
 | Live streaming (RTMP/SRT/NDI), eCDN | Not built | |
 
 ## Calendar and scheduling
