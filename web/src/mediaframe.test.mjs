@@ -44,3 +44,16 @@ test('round trip through the server-side shape, both kinds, payload to the end',
     assert.equal(r.remaining, 0, 'nothing left over');
   }
 });
+
+test('the codec rides a spare flag bit: VP9 and screen, together or apart', () => {
+  for (const [screen, vp9] of [[false, false], [true, false], [false, true], [true, true]]) {
+    const w = new Writer(null);
+    encodeMediaFrame(w, { kind: 1, key: false, ts: 5, payload: opus, screen, vp9 });
+    const r = new Reader(w.bytes(), null);
+    r.header();
+    // The server-side shape: publisher first, then the client's bytes.
+    const flags = r.bits(2), spare = r.bits(6);
+    assert.equal(spare, (screen ? 1 : 0) | (vp9 ? 2 : 0), `screen ${screen} vp9 ${vp9}`);
+    assert.ok(flags >= 2);
+  }
+});

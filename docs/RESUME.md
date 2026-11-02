@@ -111,9 +111,13 @@ The recording e2e needs an administrator: a fresh server started with `-admin-em
 
 ARCHITECTURE §6bk; `web/src/effects.js` (+ `effects.test.mjs`), `web/vendor/mediapipe` (Apache-2.0), effects panel / pre-join sheet / `camTrackFor` in `app.js`, `tools/e2e/effects.e2e.mjs`, `tools/e2e/measure-effects.mjs`. `AETHER_E2E_GPU=1` runs the harness with the GPU on.
 
+## Batch 14 — done: constant-quality camera on the socket path
+
+ARCHITECTURE §6bl; VP9 at quantizer 32 (camera) / 24 (screen) in `wsmedia.js` (`pickVideoConfig`), codec on spare flag bit 1 (`wire.js`), receivers switch decoder at a key frame. `tools/e2e/codec-study.mjs` is the study. The §6bk wire finding was corrected (A's port, not B's).
+
 ## Next, in order
 
-1. Quality-targeted camera encoding (§6bk finding: the socket path's VP8 spends its 600 kbit/s target on a flat background too; measure `bitrateMode: 'quantizer'` against it, and the WebRTC path). Probed on Chrome 156: quantizer mode is supported for VP9 and AV1, NOT for VP8, so this means the socket camera moves to VP9 with the codec signalled to receivers, then a WebGL/worker effects compositor (the GPU read-back is most of a segmentation).
+1. A WebGL/worker effects compositor (the GPU read-back is most of a segmentation, §6bk); measure the camera quantizer on real footage (§6bl).
 2. Together mode.
 2. Beyond meetings: teams as containers above channels, activity feed, calendar views + scheduling assistant, remaining chat items (see TEAMS_PARITY "Not built" rows).
 
@@ -148,6 +152,7 @@ ARCHITECTURE §6bk; `web/src/effects.js` (+ `effects.test.mjs`), `web/vendor/med
 - The layout harness checks overflow, tap size and meeting-bar overlap only; still look at the screenshots for everything else.
 - `go test -race ./...` runs packages in parallel; the 100-person fan-out test can miss real time from CPU starvation alone. If it fails only there, run it alone (and the suite with `-p 1`) before suspecting code.
 - Signup is limited to 3 an hour per address (in memory): a fresh server for an e2e needing four new accounts means a restart halfway. `accounts()` now saves each account as soon as it is made.
+- Appending to a doc in Python: read it FIRST, then open for writing. `open(p,'w').write(open(p).read()+x)` truncates before reading; it wiped ARCHITECTURE.md once (restored from git, commit 4aade70).
 - Heredocs with mixed quotes still fail in the Bash tool: write the text with Write, then append with python.
 - `measure-meeting.mjs` writes client WebSocket frames itself; frames over 125 B need the extended length (fixed; a 200-point stroke broke it).
 - Older CSS layers force `display` on some elements and beat the `hidden` attribute; inside the meeting bar `.meet-bar [hidden]` is `!important` for that reason.

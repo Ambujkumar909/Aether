@@ -4412,27 +4412,24 @@ per-frame time measured inside the pipeline):
   compositor that uses the mask where it already is, or the pipeline in a
   worker, is the measured next step. It is marked in `effects.js`.
 
-**On the wire: a finding, and not a flattering one.** A's camera over the
-socket media path, 12 s per window (tshark, loopback IPv4, plaintext
-server, `tools/e2e/measure-effects.mjs`):
+**On the wire.** A's camera over the socket media path, 12 s per window,
+VP8 at its 600 kbit/s target (tshark, loopback IPv4, plaintext server,
+`tools/e2e/measure-effects.mjs`; A's payload):
 
-| Window | On the wire | Payload |
-| --- | ---: | ---: |
-| None | 509 kbit/s | 478 kbit/s |
-| Standard blur | 505 kbit/s | 480 kbit/s |
-| Portrait blur | 532 kbit/s | 506 kbit/s |
-| A plain background | 567 kbit/s | 537 kbit/s |
-| None again | 457 kbit/s | 429 kbit/s |
+| Window | A's camera |
+| --- | ---: |
+| None | 376 kbit/s |
+| Standard blur | 120 kbit/s |
+| Portrait blur | 113 kbit/s |
+| A plain background | 146 kbit/s |
+| None again | 374 kbit/s |
 
-Blurring or replacing the background saves nothing on this path. The VP8
-encoder is configured with a 600 kbit/s target and spends it whatever the
-picture holds, so a frame that is mostly flat colour costs the same as a
-detailed one. Rule 3 says a still picture should cost almost nothing, and
-on the camera path it does not. The fix is the encoder's rate control: a
-quality target (`bitrateMode: 'quantizer'`, or a constant-quality mode),
-not a bitrate target. That is a transport change with its own measurement,
-queued next. The fake camera shows no person, so this measures the encoder
-against a blurred or flat frame, not a person against a room.
+A blurred background costs a third of a sharp one: the encoder has less
+detail to describe and undershoots its target. (A first reading of this
+capture said the opposite. It had taken the busiest client port, which was
+B's unchanging camera, for A's. Corrected the same day; §6bl has the
+per-port reading.) The fake camera shows no person, so this measures the
+encoder against a blurred or flat frame, not a person against a room.
 
 Tests:
 
@@ -4450,3 +4447,107 @@ Tests:
 `stop`, which the app had wrapped to call the pipeline's `stop`: a stack
 overflow on "None" and on camera off, caught by the first e2e run. The
 pipeline now keeps the browser's own `stop`.
+
+### 6bl. Constant quality on the socket path: VP9 by quantizer
+
+Rule 3: "a static screen should cost almost nothing and a burst of real
+motion should be allowed to spend what it needs". A bitrate target does the
+opposite: it spends roughly the same on a picture that does not change as on
+one that does. The socket media path encoded the camera with VP8 at
+600 kbit/s and the screen at 2.5 Mbit/s, both as targets. (The WebRTC path
+already negotiates VP9; its rate is the browser's congestion control.)
+
+**The study first** (`tools/e2e/codec-study.mjs`). The same 150 frames at
+1280x720 were encoded under each configuration, decoded, and compared with
+the originals (PSNR on luma, from RGB). Equal PSNR is equal quality.
+
+| Picture | VP8 600k (before) | VP9 q20 | VP9 q28 | VP9 q36 | VP9 q44 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| moving (the fake camera) | 601 kbit/s, 48.9 dB | 660, 55.1 | 588, 54.9 | 531, 54.7 | 479, 54.7 |
+| still (one frame repeated) | 579, 49.9 dB | 81, 55.1 | 81, 54.9 | 59, 54.8 | 49, 54.7 |
+| flat (a plain background) | 25, 94.7 dB | 5, 99.0 | 5, 86.2 | 5, 98.9 | 5, 79.6 |
+
+A still picture under the VP8 target cost 579 kbit/s, for nothing. Under
+VP9 at a constant quantizer it costs 49-81 kbit/s, at higher quality.
+
+Chrome 156 offers quantizer mode for VP9 and AV1, not VP8 (probed with
+`VideoEncoder.isConfigSupported`), hence the codec change.
+
+**What changed** (`web/src/wsmedia.js`, `web/src/wire.js`):
+
+- The camera is VP9 at quantizer 32, the screen at 24 (finer: it is text).
+  There is no bitrate target.
+- A browser without quantizer mode keeps VP8 at the old targets
+  (`pickVideoConfig`, unit-tested both ways).
+- The codec rides spare flag bit 1 of the media frame. The server relays
+  those bits untouched, so no server change and no extra byte.
+- A receiver whose publisher changes codec starts a new decoder at the next
+  key frame and asks for one meanwhile.
+- The backpressure bound is unchanged: past 96 KB queued on the socket,
+  screen frames drop; past 192 KB, camera frames too. A burst of motion may
+  spend more, but never queues without limit.
+- The page reports `data-ws-codec`.
+
+**Why quantizer 32, not 44.** On the fake camera, q44 is cheaper than VP8
+and still 6 dB better. But that content is synthetic: flat colours and hard
+edges, where every quantizer here scores about 55 dB. Real faces separate
+the settings far more, and rule 3 puts quality first. q32 is the safer
+default until it can be measured on real footage.
+
+**Measured in a call** (two browsers over the socket path, tshark, 12 s
+windows, per client port; `measure-effects.mjs`):
+
+| A's camera | VP8 600k (before) | VP9 q32 (now) |
+| --- | ---: | ---: |
+| None (the moving fake camera) | 376 kbit/s | 455 kbit/s |
+| Standard blur | 120 kbit/s | 88 kbit/s |
+| Portrait blur | 113 kbit/s | 82 kbit/s |
+| A plain background | 146 kbit/s | 167 kbit/s |
+
+B's camera, moving throughout, went from about 478 to 570 kbit/s. So, both
+sides of it:
+
+- Constant motion costs about a fifth more. In the study that buys about
+  6 dB of quality.
+- A blurred background costs a quarter less.
+- A still picture costs 86-92% less. That is the common case in a meeting:
+  people mostly sitting still.
+
+That is rule 3's trade, and it is the right one for the average meeting. It
+is not a free win on every frame. The fake camera never sits still, so the
+still-picture number comes from the study, not the call.
+
+Tests:
+
+- `web/src/wsmedia.test.mjs`: VP9 at quantizer where offered, VP8 at the
+  old targets otherwise or when asking throws, the screen's finer quantizer.
+- `web/src/mediaframe.test.mjs`: the codec bit and the screen bit, together
+  and apart.
+- `tools/e2e/effects.e2e.mjs` runs over the socket path. It fails when the
+  receiver ignores the codec bit: B sees no picture at all.
+
+### 6bm. The README showcase, and what looking at it found
+
+`tools/e2e/showcase.mjs` makes the README's pictures from the real app. It
+uses three fictional people on a fresh server: real chats, real scheduled
+meetings, a whiteboard sketch, and a transcript spoken through the same fake
+recogniser the recording harness uses. Looking at the pictures, as rule 8
+asks, found four defects that every test had passed:
+
+- **Captions were never visible in the gallery.** The caption bar sat at
+  z-index 2, under the tiles. The harness checked the bar's text, which was
+  there, but nobody could see it. It is now above the tiles, and 80% of the
+  stage wide (Teams' `closedCaptionsWidthPercentage`).
+- **Your own tile read "Y".** Its avatar letters were made from the label
+  "You". A standing rule says avatar letters come from the person, never the
+  text on screen (`faceOf`).
+- **Leave hung off a phone's screen.** First 55 px, once Camera gained its
+  arrow; then 11 px from the host's Leave arrow alone, which predates this
+  batch. The bar clips rather than scrolls, so the overflow check could not
+  see it. The layout harness now fails on any meeting-bar control past the
+  screen's edge, and failed on exactly these before the fix. On a phone,
+  Camera's arrow is gone (Video effects stay under More) and Leave is Teams'
+  icon-only red hang-up.
+- **Your own floating tile on a phone** was crowded by its 44 px menu button,
+  over your initials and "You". The button is hidden there; the same
+  actions are in People.

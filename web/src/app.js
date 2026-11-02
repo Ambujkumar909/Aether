@@ -1216,6 +1216,8 @@ async function enableWSMedia(reason) {
   if (state.localStream?.getTracks().length) {
     try {
       await state.wsSender.start(state.localStream);
+      // Which camera encoder this browser got, for the live checks.
+      document.documentElement.dataset.wsCodec = state.wsSender.codec ?? '';
     } catch (e) {
       console.warn('wsmedia sender:', e.message);
     }
@@ -1668,7 +1670,7 @@ function renderStage() {
     video.srcObject = null;
     vidBox.classList.add('hidden');
     empty.classList.remove('hidden');
-    $('stage-avatar').textContent = initials(featured?.name ?? '?');
+    $('stage-avatar').textContent = featured ? initials(faceOf(featured)) : '?';
     if (!$('stage-msg').textContent.startsWith('Camera unavailable')) {
       $('stage-msg').textContent = featured
         ? `${featured.name} has their camera off`
@@ -1755,6 +1757,13 @@ function renderStage() {
   markAutoPiP(hasVideo ? video : strip.querySelector('.strip-tile:not(.self-float) video') ?? strip.querySelector('video'));
 }
 
+// Whose face a tile shows: the person, never the words on screen. Your own
+// tile is labelled "You", and an avatar made from that label read "Y".
+function faceOf(p) {
+  if (p?.self) return { userId: session.user?.id, name: session.user?.displayName || '', email: session.user?.email || '' };
+  return { userId: p?.userId, name: p?.name ?? '' };
+}
+
 function paintTile(tile, p) {
   const v = tile.querySelector('video');
   const ph = tile.querySelector('.strip-ph');
@@ -1766,7 +1775,7 @@ function paintTile(tile, p) {
     if (v.srcObject) v.srcObject = null;
     v.classList.add('hidden');
     ph.classList.remove('hidden');
-    ph.querySelector('.avatar').textContent = initials(p.name);
+    ph.querySelector('.avatar').textContent = initials(faceOf(p));
   }
   const spotlit = state.spotlights.includes(p.id);
   tile.classList.toggle('self-float', !!p.float);

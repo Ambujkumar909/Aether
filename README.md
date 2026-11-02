@@ -1,247 +1,325 @@
-# Aether
+<div align="center">
 
-A meeting engine built on one idea: **most of what a video call transmits is not picture or sound, and almost none of what it discards needed to be sent.**
+<img src="web/brand/mark-256.png" width="112" alt="" />
 
-Quality is never traded for bandwidth here. Bits are removed only when they carry zero perceptual information, and the capacity that frees is spent putting quality back.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="web/brand/wordmark-dark-512.png" />
+  <img src="web/brand/wordmark-light-512.png" width="280" alt="Aether" />
+</picture>
 
----
+### Meetings and chat that send only what matters.
 
-## The claim, and the arithmetic behind it
+Video meetings, calls, chat, channels, a whiteboard, recording and live transcripts:<br/>
+one Go server and one browser client, measured down to the byte.
 
-Every number below is produced by code in this repository and pinned by a test that fails the build if it regresses. Nothing here is asserted.
+<br/>
 
-```
-go run ./cmd/bitbudget -n 4 -minutes 15
-```
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)
+![No build step](https://img.shields.io/badge/client-no_build_step-0b7a62?style=flat-square)
+![Go tests](https://img.shields.io/badge/Go_tests-494-0b7a62?style=flat-square)
+![Browser harnesses](https://img.shields.io/badge/browser_harnesses-22-0b7a62?style=flat-square)
+![Measured](https://img.shields.io/badge/every_claim-measured_with_tshark-2b3440?style=flat-square)
 
-**A 4-person, 15-minute meeting, per participant, send and receive combined:**
+[**Features**](#everything-a-team-needs-to-meet) · [**Why it is different**](#the-difference-is-measured) · [**Privacy**](#private-by-construction) · [**Architecture**](#architecture) · [**Run it**](#run-it-in-two-minutes) · [**Engineering**](#how-it-is-built)
 
-| | baseline | aether | |
-|---|---|---|---|
-| media payload | 320.40 MB | 204.58 MB | AV1 at the same quality target |
-| RTP header | 4.74 MB | 2.16 MB | −54% |
-| RTP extensions | 7.90 MB | 2.28 MB | −71%, redundant ones dropped once SSRCs bind |
-| SRTP tag | 6.32 MB | 2.88 MB | −54% |
-| UDP framing | 3.16 MB | 1.44 MB | −54% |
-| IP header | 7.90 MB | 3.60 MB | −54% |
-| Ethernet + IFG | 15.01 MB | 6.84 MB | −54% |
-| **total on the wire** | **365.42 MB** | **223.79 MB** | |
-| **sustained bitrate** | **3.25 Mbps** | **1.99 Mbps** | |
-| packets sent | 394,887 | 180,116 | |
+<br/>
 
-The overhead rows all fall by the same 54% because they are all *per packet*, and the packet count more than halved. That is the whole trick: fewer, fuller packets carrying better-compressed content, and nothing sent that nobody can see.
+<img src="docs/media/home.png" alt="The Aether home screen: the next meeting, today's schedule and quick actions" width="100%" />
 
-### Where the waste actually is
+</div>
 
-```
-ANATOMY OF ONE 20 ms OPUS PACKET AT 32 kbps
-  Ethernet + IFG     38 B  ###########
-  IPv4               20 B  ######
-  UDP                 8 B  ##
-  RTP header         12 B  ###
-  RTP extensions     20 B  ######
-  payload            80 B  ************************
-  SRTP tag           16 B  ####
-  TOTAL             194 B   payload is 41.2% of the packet
-```
+<br/>
 
-**Fifty-nine percent of an audio packet is not audio.** At 50 packets per second, per stream, for the entire call. Move the same codec at the same bitrate to 60 ms packetisation and drop the extensions the receiver stopped needing after the first second:
+## The idea
 
-```
-  payload           240 B  *****************************************
-  TOTAL             346 B   payload is 69.4% of the packet
-```
+Most of what a video call puts on the wire is not picture or sound. It is headers, repeated
+JSON, frames that nobody can see and bitrate spent on pictures that did not change. Aether
+removes those bits, and only those. **Quality is never traded for bandwidth.** Every byte it
+saves is a byte that carried no information.
 
-Identical codec. Identical bitrate. Identical audio. Three packets became one.
+That is a claim anyone can make, so every number in this file comes from a packet capture or
+a test in this repository. Where a measurement was disappointing, it is published as well.
 
-### Measured on real packets, not modelled
+<br/>
 
-`tools/bitcheck.mjs` captures live traffic with tshark and decodes it with the
-same `wire.js` the browser ships. Two runs of the same protocol:
+## Everything a team needs to meet
 
-| | one frame per message | coalesced bursts |
-|---|---|---|
-| application payload | 27.1% | **48.0%** |
-| IP + TCP header | 64.6% | 45.6% |
-| vs a JSON control plane | 3.4× | **22.8×** |
+<table>
+<tr>
+<td width="50%" valign="top">
 
-Decoded from the captured bytes: a `StateDelta` averages **3.2 B** and a
-`Ping` is exactly **1.0 B** on the wire.
+<img src="docs/media/chat.png" alt="A one-to-one chat with read receipts" width="100%" />
 
-The gap between those columns is the most useful finding in the project. **A
-dense protocol does not by itself produce a dense connection** — at one frame
-per message, 60 bytes of IP and TCP ride every small payload and the
-end-to-end win collapses from 57× per-frame to 3.4× overall. Coalescing is
-therefore not a micro-optimisation, it is the mechanism: 12.38 frames per
-message nearly doubles payload efficiency with no change to the encoding.
+**Chat, the way teams actually talk.** One-to-one, groups, channels with threaded posts,
+replies, reactions, mentions, edits with history, forwarding, files, voice messages, polls,
+scheduled send, read receipts, typing indicators and presence that knows when you are in a call.
 
-Any claim quoting only the per-frame ratio is telling a true fact
-misleadingly. Both columns are reported here for that reason.
+</td>
+<td width="50%" valign="top">
 
-### Control plane
+<img src="docs/media/meeting.png" alt="A meeting with three people, cameras off" width="100%" />
 
-A participant state change — mute, camera, raised hand, role — is **3 bytes**. The JSON it replaces, taken from a shipping competitor's protocol, is 172. Measured, not estimated:
+**Meetings laid out the way people already know.** Gallery, speaker and large-gallery views,
+a pre-join camera check, a lobby, roles (organizer, co-organizer, presenter, attendee),
+spotlight, raised hands in order, mute all, breakout rooms, and "end meeting for everyone".
 
-```
---- PASS: TestStateDeltaIsThreeBytes
-    aether=3 bytes  json=172 bytes  ratio=57.3x
-```
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-A heartbeat is **1 byte**. Over 15 minutes at 40 events per minute: 131.9 kB of JSON becomes 11.2 kB. **11.8×.**
+<img src="docs/media/whiteboard.png" alt="A shared whiteboard with a sketched flow and sticky notes" width="100%" />
 
----
+**A whiteboard on the stage.** Pens, highlighter, eraser, sticky notes and undo. Everyone sees
+a line *while it is being drawn*. A stroke costs about **2 bytes per point**: 5.9× less than
+the same stroke as JSON.
 
-## Design principles
+</td>
+<td width="50%" valign="top">
 
-**1. Delete only bits that were never quality.** There are four kinds of bits in a call. Three of them are free to remove and one is sacred.
+<img src="docs/media/transcript.png" alt="The live transcript panel, every line attributed" width="100%" />
 
-| | example | perceptual value |
-|---|---|---|
-| Overhead | headers, JSON signalling, RTCP churn | zero |
-| Undelivered | 720p sent to a 160px tile; audio from silent participants | zero — unperceivable by construction |
-| Codec waste | VP8 vs AV1 at equal quality | zero — same picture, more bits |
-| **Quality** | what you are actually looking at | **the product** |
+**Recording and live transcripts.** Every line is attributed, because each speaker's own
+browser transcribes their own voice: nobody guesses who spoke. Downloads come as `.vtt` or
+`.txt`. Recordings are made on the recorder's own computer.
 
-**2. No bitrate ceiling. Optimise the average.** Near-CBR is why mainstream video smears during motion: complexity spikes 5–10× for a few hundred milliseconds and a CBR encoder can only respond by raising the quantiser. Aether runs high-peak VBR — quiet at 1.2–2.5 Mbps, unclamped during motion — and lands at a *lower* fifteen-minute average with sharper motion.
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-The burst is bounded by *measured* capacity, not by policy. Pushing 8 Mbps into a 2 Mbps path does not buy sharpness; it parks 6 Mbps in a queue 1.5 seconds deep, adds latency, and trips our own congestion detector. On a link that carries 50 Mbps, the estimate climbs there and bursts take it.
+<img src="docs/media/captions.png" alt="Live captions above the gallery" width="100%" />
 
-**3. Never introduce cross-frame state unless recovery from its loss is cheap.** Learned the expensive way in a sibling project, where a delta codec that was 24× cheaper per frame on paper spent 13–21 MB repainting one screen after a single drop. Recovery was the most expensive operation in the system, so loss made congestion worse exactly when it was already bad. The interning dictionary here is cross-frame state, and it is safe **only** because it runs over a reliable ordered transport that guarantees it is never tested. That constraint is documented at the top of `internal/wire/doc.go` and must not be violated.
+**Live captions for everyone.** Turn them on and you see what everybody says, as they say it.
+Each person is asked first whether their speech may be turned into text.
 
----
+</td>
+<td width="50%" valign="top">
 
-## Security
+<img src="docs/media/calendar.png" alt="The calendar and availability screen" width="100%" />
 
-Authentication, user management, and the audit log are first-class modules, not an afterthought bolted to the side.
+**Scheduling built in.** A calendar with categories, invitations and co-organizers. Meeting
+notes with agenda and follow-up tasks. Moderated Q&A. An attendance list you can download.
 
-**Credentials.** Argon2id at OWASP parameters, PHC-encoded so the cost can be raised later without invalidating existing hashes. Session tokens are 256-bit random values, and only their SHA-256 is stored — a database dump does not hand the reader a set of live sessions. The token lives in an `HttpOnly` cookie, so an injected script cannot read it; CSRF is a double-submit token in a companion cookie the page *can* read and echo in a header, which a cross-origin attacker cannot do.
+</td>
+</tr>
+</table>
 
-**Account enumeration is closed.** Wrong password, unknown address, locked account, and suspended account all return one identical message, and an unknown address still pays the full argon2 verification so the timing matches. The audit log records the true reason; the response never does.
+<div align="center">
+<img src="docs/media/phone-chat.png" alt="Chat on a phone" width="30%" />
+&nbsp;&nbsp;
+<img src="docs/media/phone-meeting.png" alt="A meeting on a phone" width="30%" />
+<br/>
+<sub><b>One codebase, every screen.</b> A 360 px phone, a tablet, a laptop, a 4K monitor and a native Windows app. An automated layout harness checks every screen and fails on anything that overflows, overlaps, or is too small to tap.</sub>
+</div>
 
-**Authorisation is a table you can read on one screen.** Four roles, an explicit permission map, every check resolved server-side on every request. The client receives its permission list only so it can avoid rendering buttons that would fail. Escalation above your own rank is refused, changing your own role is refused, and removing the last active administrator is refused — locking everyone out of their own installation cannot be undone from inside the product.
+<br/>
 
-**Privilege changes take effect immediately.** A role change, a suspension, or a password change revokes every session for that user. A password change is how someone evicts an intruder, so it has to actually evict them.
+<details>
+<summary><b>The full feature list</b></summary>
 
-### The audit log is tamper-evident, not merely append-only
+<br/>
 
-Every entry carries the SHA-256 of the entry before it. Altering, deleting, or reordering anything breaks the chain from that point forward, and the break is detectable by anyone holding the head hash.
+| | |
+| --- | --- |
+| **Meetings** | Video and audio meetings, 1:1 and group calls with ringing · pre-join camera and microphone check · lobby and admission · invite links · screen sharing · gallery, speaker, large gallery and focus-on-content views · spotlight · raised hands, lower all · reactions · mute all · disable an attendee's mic or camera · remove · end for everyone · roles and meeting options · breakout rooms (assign, shuffle, timers, announcements, return) · whiteboard · Q&A with moderation · meeting notes · call health · pop-out |
+| **Recording and speech** | Recording made on your own computer · live transcription, attributed per speaker · live captions for everyone · `.vtt` and `.txt` downloads · consent asked before anyone's speech becomes text · a deployment-wide "recording allowed" switch · every start and stop in the audit log |
+| **Video** | Background blur, portrait blur, backgrounds, your own images (kept on your device) · soft focus · low-light correction · mirror my video · VP9 at constant quality where the browser can |
+| **Audio** | Neural noise suppression (RNNoise) · echo cancellation required, with a warning when a device cannot · instant unmute · same-room echo warning |
+| **Chat** | 1:1, groups and notes to self · channels (public and private) with threaded posts · formatting · reactions · replies · edit with history · delete and undo send · forward · mentions · read receipts · typing · presence and status, with automatic "in a call" and "away" · pins, saved messages · priority · scheduled send · polls, praise and announcements · files, photos, video clips and voice messages · search · filters · block |
+| **Calendar** | Scheduling with categories and invitations · co-organizers · availability · attendance history · "5 minutes left" notice |
+| **Administration** | Users and roles · deployment settings · a hash-chained, tamper-evident audit log · remote control with consent, on the Windows app |
+| **Clients** | Chrome and Edge · Safari, iOS and Firefox through WebRTC · a native Windows app (Go + WebView2) with tray, badge and notifications |
 
-```
---- PASS: TestEditingARowIsDetected
-    detected: event 5 stores hash 9ff3073d9bfe… but its contents hash to
-    80fc93d53d5d…: the row was edited in place
+What is not built yet is listed just as plainly, in [docs/TEAMS_PARITY.md](docs/TEAMS_PARITY.md).
 
---- PASS: TestDeletingARowIsDetected
-    detected: event 7 links to 0b0314c00cf4… but the previous event hashes to
-    f6efcfd60e67…: an entry was altered, deleted, or reordered
+</details>
 
---- PASS: TestRecomputingOneHashStillFails
-    detected at the following link: event 6 links to d40ede44b6f6… …
-```
+<br/>
 
-The third case is the one that matters. An attacker who edits a row *and* correctly recomputes its own hash still fails, because the next entry commits to the old value — they would have to rewrite every subsequent row, which is exactly what makes an externally pinned head hash worth having.
+## The difference is measured
 
-The field encoding is length-prefixed rather than delimiter-joined, so an actor-controlled field cannot be used to forge a colliding digest. `Verify` walks the whole chain and is exposed to operators: a tamper-evident log whose evidence nobody can inspect is a claim, not a control.
+Every figure below was captured from real traffic with **tshark** or produced by a test in
+this repository. Each one is written up, with its method, in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
----
+<table>
+<tr><th align="left">What</th><th align="right">The usual way</th><th align="right">Aether</th><th align="left"></th></tr>
+<tr><td>A participant's state change (mute, camera, hand, role)</td><td align="right">172 B of JSON</td><td align="right"><b>3 B</b></td><td>57× smaller</td></tr>
+<tr><td>A heartbeat</td><td align="right">a JSON object</td><td align="right"><b>1 B</b></td><td></td></tr>
+<tr><td>A camera that is <i>not moving</i> (socket path)</td><td align="right">579 kbit/s at a VP8 target</td><td align="right"><b>49–81 kbit/s</b></td><td>VP9 at constant quality, sharper (+5 dB)</td></tr>
+<tr><td>A camera with its background blurred</td><td align="right">376 kbit/s unblurred</td><td align="right"><b>88 kbit/s</b></td><td>blurred detail is not sent</td></tr>
+<tr><td>A 200-point whiteboard stroke</td><td align="right">2,421 B as JSON</td><td align="right"><b>409 B</b></td><td>2 bytes a point</td></tr>
+<tr><td>A spoken sentence, as live captions</td><td align="right">945 B as JSON</td><td align="right"><b>289 B</b></td><td>3.3× smaller</td></tr>
+<tr><td>Searching 50,000 people per keystroke</td><td align="right">28 ms with <code>LIKE</code></td><td align="right"><b>0.5 ms</b></td><td>index-backed, with a scale test</td></tr>
+<tr><td>A meeting where nobody is doing anything</td><td align="right">keep-alives and polls</td><td align="right"><b>nothing</b></td><td>idle costs zero</td></tr>
+</table>
 
-## What is built and proven
+**Coalescing, not just encoding, is what makes a connection dense.** At one frame per message,
+60 bytes of IP and TCP ride on every tiny payload, and only 27.1% of the bytes are application
+data. Gathering frames into 15 ms bursts takes that to **48.0%**, with no change to the
+encoding at all. Both numbers are published, because quoting only the flattering one would be
+misleading.
 
-| | status | evidence |
-|---|---|---|
-| **Binary wire protocol** | complete | exact-size assertions, fuzzed decoder |
-| **Browser codec (JS)** | complete | 24 cross-language interop checks against the live server |
-| **Bit ledger** | complete | analytic model + runtime counters + `bitbudget` CLI |
-| **Bandwidth allocator** | complete | 9 tests; 4.2x on a 12-person gallery |
-| **Congestion control** | complete | 6 tests; 32x faster recovery than a GCC reference |
-| **RTP forwarder** | complete | 8 tests; 6 layer switches, zero discontinuities |
-| **Keyframe detection** | complete | VP8 / VP9 / H.264 / AV1, hand-built vectors + fuzz |
-| **WebRTC media forwarding** | working | two pion peers exchange real media through the router |
-| **Identity: auth, RBAC, sessions** | complete | 17 tests incl. enumeration, lockout, escalation |
-| **Audit log** | complete | 9 tests incl. three distinct tamper scenarios |
-| **Modular kernel** | complete | dependency-ordered start, reverse shutdown |
-| **Web client** | working | dual theme, admin console, live ledger |
-| **Simulcast arbitration end-to-end** | partial | ladder published and forwarded; viewport-to-layer loop needs field tuning |
-| **Remote control / take control** | **not yet** | see roadmap |
+**And the honest ones.** A camera in constant motion costs about a fifth *more* under the
+constant-quality encoder. That buys about 6 dB of picture quality, and still and blurred pictures
+cost far less, so the average meeting comes out well ahead. Rule 3 below says to optimise the
+average, and the trade-off is written up rather than hidden.
 
-### Verify it yourself
+<br/>
 
-```bash
-cd engine
-go test ./...                              # 67 tests
-go run ./cmd/bitbudget -n 4 -minutes 15    # the full accounting
-go run ./cmd/aether -addr :8899 -web ../web
+## Private by construction
 
-# The server prints a bootstrap administrator and a one-time password
-# on an empty database. Sign in with it at http://localhost:8899
+- **Your voice is turned into text on your own device**, by your own browser, and only after
+  you say yes. Where the browser can recognise speech on the device, it does. Where it cannot,
+  you are told that its online service will hear you before anything starts.
+- **Recordings are made on the recorder's computer.** The server never holds the video; it
+  knows only that a recording is running, so it can tell everyone.
+- **Background effects run on your device.** The room never receives your unprocessed
+  picture. Images you add for your background are never uploaded.
+- **A background you asked to hide is never sent.** Until the segmentation model has loaded, or
+  if it cannot load, the whole frame is blurred.
+- **Turning the camera off turns the camera off.** The device is released and its light goes
+  out. A browser test fails if it does not.
+- **Security is enforced at the server, not the interface.** Every endpoint checks membership
+  before it reads a byte. Every new endpoint is tested as a stranger, as nobody signed in and
+  against cross-site requests. Inputs are bounded and tested one past the limit.
+- **Accounts:** Argon2id passwords, 256-bit sessions stored only as hashes, and sign-in errors
+  that never reveal whether an address exists.
+- **Audit:** a hash-chained log. Editing, deleting or reordering any entry breaks the chain,
+  and the break can be found.
 
-cd ../web
-npm install                                # ws, for the test harness only
-AETHER_EMAIL=admin@aether.local AETHER_PASSWORD=... npm run interop
-```
-
----
+<br/>
 
 ## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Clients
+    B["Browser<br/><sub>vanilla JS · no build step</sub>"]
+    W["Windows app<br/><sub>Go + WebView2</sub>"]
+  end
+  subgraph Server["aether · one Go binary"]
+    G["Signal gateway<br/><sub>binary protocol · 15 ms coalescing</sub>"]
+    R["Rooms<br/><sub>roles · breakouts · whiteboard · recording state</sub>"]
+    S["SFU<br/><sub>simulcast · congestion control · RTP forwarder</sub>"]
+    M["Modules<br/><sub>identity · messaging · scheduling · settings · audit · control</sub>"]
+    D[("SQLite<br/><sub>forward-only migrations</sub>")]
+  end
+  B & W -- "WebSocket: binary frames, media fallback" --> G
+  B & W -- "WebRTC: UDP 8801 or TURN" --> S
+  G --> R
+  R --> S
+  G --> M
+  M --> D
+```
+
+- **A modular monolith.** Each module is a vertical slice that owns its data, and no module
+  reads another's internals. The distance between "a packet arrived" and "a packet was
+  forwarded" is the product, and every process boundary on that path is a queue.
+- **One binary protocol.** Opcodes are one or two bytes, and strings are interned once per
+  connection. Frames are self-contained, so a dropped one never costs a repaint.
+- **Two media paths.** WebRTC carries the call wherever it can. Where a network blocks it, media
+  rides the same WebSocket as the page, encoded with WebCodecs. Nobody is left without a call.
+- **No build step.** The browser loads ES modules directly. What runs is what is in `web/src`.
+
+<details>
+<summary><b>The repository</b></summary>
 
 ```
 engine/
   cmd/aether/            the server
-  cmd/bitbudget/         the accounting, on demand
+  cmd/aether-desktop/    the Windows app (Go + WebView2)
+  cmd/bitbudget/         per-layer byte accounting for a whole meeting
   internal/
-    wire/                binary protocol. 1-byte ping, 3-byte state delta
-    ledger/              every byte attributed to a layer, RFC-sourced
-    sfu/                 allocator, congestion control, RTP forwarder, router
-    modular/             module lifecycle, dependency-ordered
-    room/                participants, speaker ranking
-    signal/              WebSocket gateway, 15 ms coalescing window
-    modules/
-      identity/          users, credentials, sessions, RBAC
-      audit/             hash-chained, tamper-evident record
-    platform/
-      database/          the single handle, forward-only migrations
-      httpx/             JSON, middleware, rate limiting
+    wire/                the binary protocol
+    signal/              WebSocket gateway, coalescing, meeting features on the wire
+    room/                participants, roles, breakouts, whiteboard, recording state
+    sfu/                 allocator, congestion control, RTP forwarder
+    rc/                  remote-control input codec and safety rules
+    ledger/              every byte attributed to a layer
+    modules/             identity · messaging · scheduling · settings · audit · control
+    platform/            database, HTTP plumbing
 web/
-  src/wire.js            the browser half of the codec
-  src/rtc.js             publisher + subscriber peer connections
-  src/console.js         administration: people, audit, sessions
-  src/api.js             CSRF-aware transport
-  styles.css             dual theme
+  src/                   the client: wire.js, rtc.js, wsmedia.js, app.js, …
+  vendor/                RNNoise and MediaPipe, with their licences
+tools/
+  e2e/                   browser harnesses, the layout harness, tshark drivers
+  teams-evidence.mjs     reads an installed Teams package for parity evidence
+docs/
+  ARCHITECTURE.md        every decision and measurement, including the disappointing ones
+  TEAMS_PARITY.md        feature by feature: built, not built, and why
 ```
 
-A **modular monolith**, matching the contract already used in ITCM: vertical slices under `internal/modules`, shared plumbing under `internal/platform`, and no module importing another module's internals — `identity` holds an `audit.Recorder`, `audit` holds an `audit.Guard` that `identity` happens to satisfy, and neither knows the other's types.
+</details>
 
-The reason for a monolith is latency. The distance between "a packet arrived" and "the packet was forwarded" is the product, and every process boundary on that path is a serialisation, a scheduler hop, and a queue.
+<br/>
 
-### Two peer connections per participant
+## Run it in two minutes
 
-The publisher connection is always offered by the client; the subscriber connection is always offered by the server. That asymmetry makes renegotiation glare *structurally impossible* rather than something to survive — each connection has exactly one possible offerer, so there is nothing to arbitrate. The cost is a second ICE and DTLS handshake at join, paid once, in parallel, before anyone is looking.
+You need **Go 1.25+**. For the browser harnesses, you also need **Node 20+** and Chrome.
 
-### The forwarder is where an SFU is won or lost
-
-Each inbound simulcast rung has its own sequence and timestamp space; the receiver believes it is watching one stream. A forwarder that simply relays whichever layer is selected produces, on the first quality change, a sequence jump of thousands, a jitter buffer that concludes it lost an enormous burst, and a freeze until the next keyframe. Users experience this as "it stutters whenever the network changes."
-
-This forwarder maintains its own outbound space and translates every packet into it. Switching is invisible:
-
-```
---- PASS: TestManySwitchesStayContiguous
-    6 switches, 117 packets, zero discontinuities
+```bash
+git clone https://github.com/Ambujkumar909/Aether.git
+cd Aether/engine
+go run ./cmd/aether -addr :8443 -tls -web ../web
 ```
 
-Upstream loss still shows through as a gap, because the receiver's concealment and NACK logic depends on seeing it.
+Open **https://localhost:8443**. On an empty database the server prints a bootstrap
+administrator's email and a one-time password. Sign in, then create accounts or invite people.
 
----
+```bash
+# The checks this project holds itself to
+cd engine && go test -race ./...              # 494 tests, under the race detector
+cd ../web && npm test                         # client unit tests
+node ../tools/e2e/layout.e2e.mjs https://localhost:8443   # every screen at phone, tablet and desktop
+go run ./cmd/bitbudget -n 4 -minutes 15       # where every byte of a meeting goes
+```
 
-## Roadmap
+<br/>
 
-1. **Viewport-to-layer loop tuning against real telemetry.** The allocator, the forwarder, and the `Viewport` frame all exist and are wired; `MinUtilityPerMbps` is currently fitted to two hand-worked cases rather than to field data.
-2. **Remote control and take-control** — port from ITCM's `agent/internal/rc`, which already solves screen capture, dirty-region detection with sequence-number recovery, `SendInput` injection, and the secure attention sequence on Windows and macOS. Its constraint carries over intact: self-contained frames, cheap recovery.
-3. **End-to-end encryption** via insertable streams. The speaker-ranking design already anticipates it — energy is reported by the client precisely so the server never needs to listen.
-4. **Recording, breakouts, reactions** — opcodes reserved, handlers not written.
-5. **TURN deployment** for symmetric NAT, and SFU-to-SFU relay past 500 participants per node, where a compact trunk framing would pay for itself immediately.
+## How it is built
 
-**Known work items:**
+The project runs on a short list of standing rules ([CLAUDE.md](CLAUDE.md)). A change that does
+not meet them is not finished.
 
-- `Estimator.Observe` uses a fixed exponential filter; a trendline or Kalman estimator would classify overuse earlier.
-- Layer resolutions are seeded from the conventional ladder rather than read from the publisher, so the allocator's spatial term is approximate until a rung has been measured.
-- Sessions are single-factor. TOTP enrolment is the obvious next control, and the audit vocabulary already has room for it.
+1. **Measure every feature at the bit level, when it is built.** Capture it with tshark on the
+   real connection. Count every layer, and report payload efficiency next to the raw totals.
+2. **No wasted packets.** Coalesce, send nothing when nothing changed, never pay for a header
+   twice, and bound every queue.
+3. **Quality is never traded for bits.** Optimise the average, not the peak.
+4. **Prove the test can fail.** New tests are mutation-checked: break the code and confirm the
+   test catches it. Socket tests use real sockets. Everything runs under `-race`.
+5. **No cross-frame state unless recovery is cheap.**
+6. **Write the measurement down**, including the ones that were disappointing.
+7. **Speed, accuracy and security, for 50,000 people.** Every list is index-backed, and every
+   push carries what the view draws.
+8. **Every screen works on every device**, verified at 390, 820 and 1280 px before it ships.
+
+That discipline has caught real defects: frames reaching the wire in the wrong order under
+load, captions hidden behind the gallery, a host handover chosen at random on a clock tie, and
+a call chat showing the wrong conversation. Each was reproduced first, fixed, and recorded
+with the numbers in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+<br/>
+
+## Where it is going
+
+- **A GPU compositor for video effects.** Segmentation is measured and the next step is
+  identified: most of its cost is reading the mask back from the GPU.
+- **Together mode**, with spatial audio.
+- **Teams as containers above channels**, an activity feed, and calendar views with a
+  scheduling assistant.
+- **Server-side recording** linked from the meeting chat, and a Word transcript.
+- **Native mobile apps.** The web client already adapts to phones today.
+
+The full list, including what is deliberately out of scope, is in
+[docs/TEAMS_PARITY.md](docs/TEAMS_PARITY.md).
+
+<br/>
+
+<div align="center">
+<img src="web/brand/mark-64.png" width="32" alt="" />
+<br/>
+<sub>Built with care, and measured.<br/>Third-party components keep their own licences: <a href="web/vendor/rnnoise/LICENSE">RNNoise</a>, <a href="web/vendor/mediapipe/LICENSE">MediaPipe</a>.</sub>
+</div>

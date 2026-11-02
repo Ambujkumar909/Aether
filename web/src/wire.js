@@ -597,11 +597,13 @@ export function decodeICE(r) {
 // A 120 B Opus frame (48 kbit/s x 20 ms) is 122 B client to server and 123 B
 // server to client (one-byte header), against 127 before; tshark figures in
 // ARCHITECTURE.md.
-export function encodeMediaFrame(w, { kind, key, ts, payload, screen = false }) {
+// Flags: bit 0 of the six spare bits marks a screen, bit 1 says the video is
+// VP9 (else VP8). The server relays them untouched.
+export function encodeMediaFrame(w, { kind, key, ts, payload, screen = false, vp9 = false }) {
   w.header(Op.MediaFrame);
   w.bits(kind & 1, 1);
   w.bits(key ? 1 : 0, 1);
-  w.bits(screen ? 1 : 0, 6);
+  w.bits((screen ? 1 : 0) | (vp9 ? 2 : 0), 6);
   if (kind === 1) w.uvarint(ts);
   w.raw(payload);
 }
@@ -613,7 +615,7 @@ export function decodeMediaFrame(r) {
   const spare = r.bits(6);
   const ts = kind === 1 ? r.uvarint() : 0;
   const payload = r.tail();
-  return { publisher, kind, key, ts, payload, screen: (spare & 1) === 1 };
+  return { publisher, kind, key, ts, payload, screen: (spare & 1) === 1, vp9: (spare & 2) === 2 };
 }
 
 // The whole gallery in one frame. A scroll moves every tile at once, and

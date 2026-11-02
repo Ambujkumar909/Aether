@@ -533,6 +533,19 @@ try {
         }
         return out;
       });
+      // ...and none of them hangs off the screen. The bar clips rather than
+      // scrolls, so the page-overflow check cannot see a Leave button cut in
+      // half at the right edge (the phone's dock, when Camera gained its arrow).
+      const offscreen = await page.evaluate(() =>
+        [...document.querySelectorAll('#meet-bar button')]
+          .filter((e) => { const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0 && !e.closest('[hidden], .mb-pop, .audio-pop'); })
+          .filter((e) => { const r = e.getBoundingClientRect(); return r.right > innerWidth + 1 || r.left < -1; })
+          .map((e) => `${e.id || e.className} [${Math.round(e.getBoundingClientRect().left)}..${Math.round(e.getBoundingClientRect().right)}] of ${innerWidth}`)
+      );
+      if (offscreen.length) {
+        fail(`${tag}: ${offscreen.length} meeting bar control(s) off the screen`);
+        for (const o of offscreen.slice(0, 6)) console.log(`          ${o}`);
+      }
       if (overlaps.length) {
         fail(`${tag}: ${overlaps.length} control(s) in the meeting bar overlap`);
         for (const o of overlaps.slice(0, 6)) console.log(`          ${o}`);

@@ -1139,7 +1139,9 @@ select.input {
   left: 50%;
   transform: translateX(-50%);
   bottom: 18px;
-  max-width: min(70%, 600px);
+  /* Teams' closedCaptionsWidthPercentage = 80. Above the tiles: at z-index 2
+     the gallery covered it, and captions were on but never seen. */
+  max-width: min(80%, 960px);
   padding: 11px 18px;
   border-radius: var(--r-md);
   background: var(--overlay);
@@ -1148,7 +1150,7 @@ select.input {
   font-size: 13.5px;
   line-height: 1.45;
   text-align: center;
-  z-index: 2;
+  z-index: 9;
 }
 
 /* ------------------------- Filmstrip ------------------------- */
@@ -7371,4 +7373,21 @@ h2 .who-link { font: inherit; }
 @media (pointer: coarse) {
   .fx-switch { min-height: 44px; }
   .fx-remove { width: 44px; height: 44px; top: -6px; right: -6px; }
+}
+
+/* Your own floating tile on a phone is too small for its menu button: it
+   covered your initials and the "You" label. The same actions are in People. */
+@media (max-width: 720px) {
+  .strip-tile.self-float .tile-more { display: none; }
+}
+
+/* The phone's dock has room for Camera, Mic, Share and Leave, not a fourth
+   arrow: with Camera's, Leave was cut off at the right edge. Video effects
+   stay one tap away under More. */
+@media (max-width: 720px) {
+  #btn-cam-more { display: none; }
+  /* Leave as Teams' phone app draws it: the red hang-up alone, named for
+     screen readers. With the host's arrow it ran 11 px off a 390 px screen. */
+  .mb-leave > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .mb-leave { padding: 0 14px; min-width: 52px; justify-content: center; }
 }

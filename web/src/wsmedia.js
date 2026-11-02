@@ -54,6 +54,31 @@ const VIDEO_BITRATE = 600_000; // bits/s. TCP path: lean, still legible.
 // this raises quality, not risk.
 const SCREEN_BITRATE = 2_500_000;
 const AUDIO_BITRATE = 48_000;
+
+// Constant quality, where the browser can (ARCHITECTURE §6bl). A bitrate
+// target spends the same bits on a still picture as on a moving one: measured,
+// VP8 at 600 kbit/s spent 579 kbit/s on a picture that did not change. VP9 at
+// a constant quantizer spends what the picture needs -- 49 kbit/s for that
+// still picture, at better quality (tools/e2e/codec-study.mjs) -- and a burst
+// of motion may spend more, which the backpressure below still bounds.
+// Quantizer 0 is best, 63 worst. The screen gets the finer one: it is text.
+export const VP9 = 'vp09.00.10.08';
+export const CAMERA_Q = 32;
+export const SCREEN_Q = 24;
+
+// The encoder for a camera or a screen: VP9 at a constant quality, or VP8 at
+// the old target where VP9's quantizer mode is not available. `supported` is
+// VideoEncoder.isConfigSupported, injectable for tests.
+export async function pickVideoConfig(width, height, framerate, screen, supported = (c) => VideoEncoder.isConfigSupported(c)) {
+  const base = { width, height, framerate, latencyMode: 'realtime' };
+  const q = { ...base, codec: VP9, bitrateMode: 'quantizer' };
+  try {
+    if ((await supported(q))?.supported) return { config: q, perFrame: { vp9: { quantizer: screen ? SCREEN_Q : CAMERA_Q } }, vp9: true };
+  } catch {
+    /* not this browser */
+  }
+  return { config: { ...base, codec: 'vp8', bitrate: screen ? SCREEN_BITRATE : VIDEO_BITRATE }, perFrame: {}, vp9: false };
+}
 const MAX_ENCODE_QUEUE = 4; // chunks pending in the encoder before we drop
 
 // Socket backpressure. This is the bound on the ONE queue that was unbounded:
@@ -175,19 +200,15 @@ export class WSMediaSender {
   async startScreen(track) {
     if (this.screen || this.stopped) return;
     const settings = track.getSettings();
+    const pick = await pickVideoConfig(settings.width || 1280, settings.height || 720, settings.frameRate || 30, true);
+    if (this.screen || this.stopped) return;
     const enc = new VideoEncoder({
-      output: (chunk) => this._emit(1, chunk, true),
+      output: (chunk) => this._emit(1, chunk, true, pick.vp9),
       error: (e) => console.warn('wsmedia screen encoder:', e.message),
     });
-    enc.configure({
-      codec: 'vp8',
-      width: settings.width || 1280,
-      height: settings.height || 720,
-      bitrate: SCREEN_BITRATE,
-      framerate: settings.frameRate || 30,
-      latencyMode: 'realtime',
-    });
+    enc.configure(pick.config);
     this.screen = enc;
+    this.screenPerFrame = pick.perFrame;
     this.forceScreenKey = true;
     this.screenFrameNo = 0;
 
@@ -211,7 +232,7 @@ export class WSMediaSender {
         this.forceScreenKey = false;
         this.screenFrameNo++;
         try {
-          enc.encode(frame, { keyFrame: key });
+          enc.encode(frame, { keyFrame: key, ...this.screenPerFrame });
         } catch (e) {
           console.warn('wsmedia screen encode:', e.message);
         }
@@ -238,19 +259,15 @@ export class WSMediaSender {
 
   async _startVideo(track) {
     const settings = track.getSettings();
+    const pick = await pickVideoConfig(settings.width || 640, settings.height || 360, settings.frameRate || 30, false);
     const enc = new VideoEncoder({
-      output: (chunk) => this._emit(1, chunk),
+      output: (chunk) => this._emit(1, chunk, false, pick.vp9),
       error: (e) => console.warn('wsmedia video encoder:', e.message),
     });
-    enc.configure({
-      codec: 'vp8',
-      width: settings.width || 640,
-      height: settings.height || 360,
-      bitrate: VIDEO_BITRATE,
-      framerate: settings.frameRate || 30,
-      latencyMode: 'realtime',
-    });
+    enc.configure(pick.config);
     this.video = enc;
+    this.videoPerFrame = pick.perFrame;
+    this.codec = pick.vp9 ? 'vp9' : 'vp8'; // for the record (data-ws-codec)
 
     const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
     this.readers.push(reader);
@@ -275,7 +292,7 @@ export class WSMediaSender {
         this.forceKey = false;
         this.frameNo++;
         try {
-          enc.encode(frame, { keyFrame: key });
+          enc.encode(frame, { keyFrame: key, ...this.videoPerFrame });
         } catch (e) {
           console.warn('wsmedia encode:', e.message);
         }
@@ -344,13 +361,13 @@ export class WSMediaSender {
     })();
   }
 
-  _emit(kind, chunk, screen = false) {
+  _emit(kind, chunk, screen = false, vp9 = false) {
     if (this.stopped) return;
     const payload = new Uint8Array(chunk.byteLength);
     chunk.copyTo(payload);
     const key = kind === 0 || chunk.type === 'key';
     this.send((w) =>
-      this.encodeFrame(w, { kind, key, screen, ts: Math.max(0, Math.round(chunk.timestamp)), payload })
+      this.encodeFrame(w, { kind, key, screen, vp9, ts: Math.max(0, Math.round(chunk.timestamp)), payload })
     );
   }
 
@@ -430,11 +447,11 @@ export class WSMediaReceiver {
     this.awaitingScreenKey = true;
   }
 
-  push({ kind, key, ts, payload, screen }) {
+  push({ kind, key, ts, payload, screen, vp9 = false }) {
     if (this.closed) return;
     this.framesIn++;
-    if (kind === 1 && screen) this._screen(key, ts, payload);
-    else if (kind === 1) this._video(key, ts, payload);
+    if (kind === 1 && screen) this._screen(key, ts, payload, vp9);
+    else if (kind === 1) this._video(key, ts, payload, vp9);
     else {
       // Audio frames carry no timestamp (wire.js). The decoder wants a
       // monotonic one; count in 20 ms steps. The jitter clock schedules by
@@ -464,7 +481,19 @@ export class WSMediaReceiver {
     return this.screenStream?.getVideoTracks()[0] ?? null;
   }
 
-  _screen(key, ts, payload) {
+  _screen(key, ts, payload, vp9 = false) {
+    const codec = vp9 ? VP9 : 'vp8';
+    if (this.sdec && this.scodec !== codec) {
+      if (!key) {
+        this._needKey();
+        return;
+      }
+      try {
+        this.sdec.close();
+      } catch {}
+      this.sdec = null;
+    }
+    this.scodec = codec;
     if (!this.screenCanvas) {
       this.screenCanvas = document.createElement('canvas');
       this.screenCanvas.width = 1280;
@@ -492,7 +521,7 @@ export class WSMediaReceiver {
           this.awaitingScreenKey = true;
         },
       });
-      this.sdec.configure({ codec: 'vp8' });
+      this.sdec.configure({ codec });
     }
     if (this.awaitingScreenKey && !key) return;
     this.awaitingScreenKey = false;
@@ -519,7 +548,21 @@ export class WSMediaReceiver {
     this.screenCtx = null;
   }
 
-  _video(key, ts, payload) {
+  _video(key, ts, payload, vp9 = false) {
+    // The publisher's codec changed (a new encoder, another browser): start a
+    // decoder for it at the next key frame.
+    const codec = vp9 ? VP9 : 'vp8';
+    if (this.vdec && this.vcodec !== codec) {
+      if (!key) {
+        this._needKey();
+        return;
+      }
+      try {
+        this.vdec.close();
+      } catch {}
+      this.vdec = null;
+    }
+    this.vcodec = codec;
     if (!this.vdec) {
       this.vdec = new VideoDecoder({
         output: (frame) => {
@@ -543,7 +586,7 @@ export class WSMediaReceiver {
           this._needKey();
         },
       });
-      this.vdec.configure({ codec: 'vp8' });
+      this.vdec.configure({ codec });
     }
     // A decoder cannot start on a delta frame. Waiting, ask the publisher
     // for a key (rate-limited); the periodic one is only the fallback.
