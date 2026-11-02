@@ -175,8 +175,9 @@ export async function removeImage(id) {
 
 const VENDOR = '/vendor/mediapipe';
 // Past this many milliseconds a segmentation (with its read-back), the mask is
-// made every other frame. ponytail: main-thread pipeline; a worker with
-// MediaStreamTrackProcessor (Chrome only) is the upgrade if this binds.
+// made every other frame. ponytail: main-thread pipeline, about 9 ms a frame
+// with a GPU (§6bn); segmentation is the cost, so a worker running it is the
+// upgrade if this binds. (A WebGL compositor was measured: no gain.)
 export const SEG_BUDGET_MS = 12;
 let segmenterPromise = null;
 
@@ -297,8 +298,16 @@ export class EffectsPipeline {
     }
     this.stats.frames++;
     this.stats.ms += performance.now() - t0;
-    // The cost per frame on this device, for the record (ARCHITECTURE).
-    if (this.stats.frames % 60 === 0) {
+    // The cost per frame on this device, for the record (ARCHITECTURE), and
+    // the rate actually achieved: once a second.
+    const now = performance.now();
+    this.markAt ??= now;
+    this.markFrames ??= 0;
+    this.markFrames++;
+    if (now - this.markAt >= 1000) {
+      document.documentElement.dataset.fxFps = ((this.markFrames * 1000) / (now - this.markAt)).toFixed(1);
+      this.markAt = now;
+      this.markFrames = 0;
       document.documentElement.dataset.fxMs = (this.stats.ms / this.stats.frames).toFixed(1);
       document.documentElement.dataset.fxSegMs = (this.stats.segMs / Math.max(1, this.stats.segs)).toFixed(1);
       document.documentElement.dataset.fxSegEvery = String(this.segEvery);

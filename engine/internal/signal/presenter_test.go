@@ -121,6 +121,22 @@ func (f *presenterFixture) drain(id string, d time.Duration) []seen {
 						ids = append(ids, r.Str())
 					}
 					out = append(out, seen{h.Op, strings.Join(ids, ","), ""})
+				case wire.OpTogether:
+					// a: "state" or the sender; b: on/scene or the mask length.
+					if r.Bits(3) == togState {
+						on := r.Bool()
+						r.Bits(4)
+						if on {
+							r.Str()
+							out = append(out, seen{h.Op, "state", fmt.Sprint("on ", r.Uvarint())})
+						} else {
+							out = append(out, seen{h.Op, "state", "off"})
+						}
+					} else {
+						r.Bits(5)
+						from := r.Str()
+						out = append(out, seen{h.Op, from, fmt.Sprint(len(r.Blob()))})
+					}
 				case wire.OpRecording:
 					// a: "state" or the speaker; b: the flags or the text.
 					kind := r.Bits(3)

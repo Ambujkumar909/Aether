@@ -124,6 +124,9 @@ type Room struct {
 	// Recording, transcription and captions (recording.go).
 	rec *recording
 
+	// Together mode (together.go).
+	tog *together
+
 	// breakouts is this meeting's breakout rooms, nil if none. See breakout.go.
 	breakouts *Breakouts
 

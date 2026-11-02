@@ -4395,22 +4395,24 @@ proportion to its mean luma, up to 1.8x, and leaves a bright one alone.
 "Soft focus" lays a light blur over the sharp picture. "Mirror my video"
 changes only your own view; others always see you the right way round.
 
-**Cost on this machine** (Chrome headless, fake camera at 640x480,
-per-frame time measured inside the pipeline):
+**Cost on this machine** (corrected in §6bn; Chrome headless, one page in
+front, the real pipeline on a drawn person, `tools/e2e/measure-fx-cost.mjs`):
 
-| | Per frame | One segmentation, with its read-back | Segmented |
-| --- | ---: | ---: | --- |
-| GPU on (`AETHER_E2E_GPU=1`) | 16.4 ms | 32.7 ms | every 2nd frame |
-| GPU off | 26.9 ms | 45.5 ms | every 2nd frame |
+| | Per frame (median) | A segmentation, with its read-back | Frame rate |
+| --- | ---: | ---: | ---: |
+| GPU on (Intel UHD Graphics) | 8.8 ms | about 18 ms, every frame | 30 fps |
+| GPU off | 17.4 ms | about 30 ms, every 2nd frame | 30 fps |
+
+(A first reading, inside the two-browser e2e, said 16.4 and 26.9 ms. There
+the camera's page is a background tab and Chrome throttles it.)
 
 - The background is blurred at a quarter of the size and scaled up: a blur
   has no fine detail to lose, and it is a sixteenth of the pixels.
 - Where a segmentation costs more than 12 ms, the mask is made every other
   frame. The smoothed mask carries the edge between, and the picture itself
   stays at full rate.
-- Most of a segmentation is reading the mask back from the GPU. A WebGL
-  compositor that uses the mask where it already is, or the pipeline in a
-  worker, is the measured next step. It is marked in `effects.js`.
+- The cost is the segmentation, not the compositing. A WebGL2 compositor
+  was built and measured, and bought nothing (§6bn).
 
 **On the wire.** A's camera over the socket media path, 12 s per window,
 VP8 at its 600 kbit/s target (tshark, loopback IPv4, plaintext server,
@@ -4551,3 +4553,54 @@ asks, found four defects that every test had passed:
 - **Your own floating tile on a phone** was crowded by its 44 px menu button,
   over your initials and "You". The button is hidden there; the same
   actions are in People.
+
+### 6bn. The GPU compositor that was not worth keeping
+
+§6bk recorded 16.4 ms a frame with the GPU on, and named a GPU compositor as
+the next step. One was built: WebGL2 shaders smoothing the mask over time,
+blurring a quarter-size copy of the frame and compositing, with MediaPipe
+either sharing its context (so the mask never came back to the CPU) or
+handing its mask over to be uploaded. Then it was measured. It was not kept,
+and the measurement is why.
+
+**Sharing MediaPipe's context was catastrophic.** With the segmenter bound
+to the compositor's own canvas, a segmentation took about 2 s and the
+pipeline ran at 3-4 fps. That held with the default context attributes too.
+Given its own canvas, the same segmenter ran in 17 ms.
+
+**The compositor itself bought nothing.** Measured alone
+(`tools/e2e/measure-fx-cost.mjs`: one page in front, the real pipeline, a
+drawn person, 12 s, the last 60 frames, Intel UHD Graphics through ANGLE):
+
+| | Canvas2D | WebGL2 compositor |
+| --- | ---: | ---: |
+| GPU on: pipeline per frame (median) | 8.8 ms | 8.5 ms |
+| GPU off: pipeline per frame (median) | 17.4 ms | 17.3 ms |
+| Frame rate, both | 30 fps | 30 fps |
+
+The cost is the segmentation (about 18 ms on average with its read-back,
+GPU on), not the compositing. A few hundred lines of shaders for 0.3 ms
+were deleted; the Canvas2D path stands.
+
+**And §6bk's numbers were wrong.** They were read inside the two-browser
+e2e, where one page is a background tab and Chrome throttles its timers,
+including the one drawing the test camera. Measured in front, the pipeline
+runs at the camera's full 30 fps: 8.8 ms a frame with the GPU, 17.4 ms
+without. §6bk is corrected.
+
+**What the work did leave:**
+
+- **A person in the test.** A drawn head and shoulders is found as a person
+  by the segmenter; probed against both delegates, the masks agree. The
+  effects harness's camera is now that figure against a plain wall, with
+  stripes on the right-hand third, so it checks the actual job: the face
+  stays a face while the background is blurred, or replaced by a colour.
+- **A defect, found by that test.** On a striped wall the segmenter is only
+  half-sure of a drawn face, which shows as a face blended with the new
+  background. The blur check could never have caught that, because a
+  blurred background near a face is skin-coloured anyway. The
+  face-in-front-of-teal check can.
+- **Cost markers that tell the truth.** `data-fx-ms`, `data-fx-seg-ms` and
+  a new `data-fx-fps` are updated once a second instead of every 60 frames.
+  At 4 fps, 60 frames never came within a test, and the markers read
+  "undefined" without saying why.

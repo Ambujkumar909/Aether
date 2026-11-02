@@ -206,6 +206,10 @@ const (
 	// OpWhiteboard: the board (room/whiteboard.go, signal/whiteboard.go):
 	// open, strokes, live previews, erase, sticky notes, clear, close.
 	OpWhiteboard Op = 0x127
+
+	// OpTogether: Together mode (room/together.go, signal/together.go): on or
+	// off for everyone and the scene, and each person's 64 x 36 outline.
+	OpTogether Op = 0x128
 )
 
 var ErrBadVersion = errors.New("wire: unsupported protocol version")

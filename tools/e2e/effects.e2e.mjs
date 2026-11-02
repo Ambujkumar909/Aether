@@ -12,9 +12,11 @@
 //   - Mirror my video changes only A's own view;
 //   - the choice is remembered on this device.
 //
-// The fake camera shows no person, so the segmenter rightly finds only
-// background: every check below is about what is sent, not about how good
-// the edge around a person is.
+// A's camera is a drawn person -- head and shoulders in the top-left quarter
+// -- against a plain wall with stripes on its right-hand third (the detail a
+// blur takes away). The segmenter finds the figure as a person (checked against
+// the CPU mask in probing), so the checks read two regions of what B
+// receives: the face must stay a face while the background changes.
 //
 //   node tools/e2e/effects.e2e.mjs [https://localhost:8443]
 import { writeFileSync } from 'node:fs';
@@ -39,6 +41,31 @@ function redPNG() {
   return file;
 }
 
+const CAMERA = `(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async (c) => {
+    if (!c || !c.video) return real(c);
+    const cv = document.createElement('canvas');
+    cv.width = 640; cv.height = 360;
+    const g = cv.getContext('2d');
+    let t = 0;
+    const draw = () => {
+      t++;
+      g.fillStyle = '#c9d6df'; g.fillRect(0, 0, 640, 360);
+      for (let x = 432; x < 640; x += 16) { g.fillStyle = ((x / 16 + (t >> 4)) % 2) ? '#c9d6df' : '#6f7c88'; g.fillRect(x, 0, 16, 360); }
+      g.fillStyle = '#2a2f3a'; g.beginPath(); g.ellipse(160, 175, 120, 70, 0, Math.PI, 0); g.fill(); g.fillRect(40, 175, 240, 185);
+      g.fillStyle = '#e0ac8a'; g.beginPath(); g.ellipse(160, 80, 45, 58, 0, 0, 2 * Math.PI); g.fill();
+      g.fillStyle = '#3b2a20'; g.beginPath(); g.ellipse(160, 45, 48, 28, 0, Math.PI, 0); g.fill();
+    };
+    draw();
+    setInterval(draw, 33);
+    const s = cv.captureStream(30);
+    if (c.audio) (await real({ audio: c.audio })).getAudioTracks().forEach((tr) => s.addTrack(tr));
+    (window.__streams = window.__streams || []).push(s);
+    return s;
+  };
+})();`;
+
 const acc = await accounts(['A', 'B']);
 const browser = await launch();
 const log = [];
@@ -46,23 +73,28 @@ const room = 'fx-' + Math.random().toString(36).slice(2, 8);
 
 // What B sees of A: detail (mean absolute difference between neighbouring
 // pixels) and mean colour, read from the video element's pixels.
-const look = (p) => p.evaluate(() => {
+// region: [x0, y0, x1, y1] as fractions of the picture. The background is
+// the right-hand third; the face is the middle of the head.
+const BG = [0.68, 0.1, 0.98, 0.9], FACE = [0.22, 0.17, 0.28, 0.3];
+const look = (p, region = BG) => p.evaluate((region) => {
   const v = [...document.querySelectorAll('#stage video')].find((x) => x.readyState >= 2 && x.videoWidth && !x.closest('.mirror'));
   if (!v) return null;
   const c = document.createElement('canvas');
   c.width = 320; c.height = 180;
   const g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(v, 0, 0, 320, 180);
-  const d = g.getImageData(0, 0, 320, 180).data;
+  const [x0, y0, x1, y1] = [Math.round(region[0] * 320), Math.round(region[1] * 180), Math.round(region[2] * 320), Math.round(region[3] * 180)];
+  const d = g.getImageData(x0, y0, x1 - x0, y1 - y0).data, w = x1 - x0, h = y1 - y0;
   let detail = 0, r = 0, gg = 0, b = 0;
-  for (let y = 0; y < 180; y++) for (let x = 0; x < 319; x++) {
-    const i = (y * 320 + x) * 4;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w - 1; x++) {
+    const i = (y * w + x) * 4;
     detail += Math.abs(d[i] - d[i + 4]) + Math.abs(d[i + 1] - d[i + 5]) + Math.abs(d[i + 2] - d[i + 6]);
     r += d[i]; gg += d[i + 1]; b += d[i + 2];
   }
-  const n = 180 * 319;
+  const n = h * (w - 1);
   return { detail: detail / n, r: r / n, g: gg / n, b: b / n };
-});
+}, region);
+const skin = (f) => f && f.r > 170 && f.r > f.g + 25 && f.g > f.b;
 const fx = (p) => p.evaluate(() => document.documentElement.dataset.fx ?? '');
 const pick = (p, label) => p.evaluate((label) => {
   const t = [...document.querySelectorAll('#view-effects .fx-tile')].find((x) => x.title === label || x.textContent.trim() === label);
@@ -83,6 +115,7 @@ const settle = async (p, want = () => true) => {
 try {
   const A = await signedIn(browser, acc.A, 'A', log);
   const B = await signedIn(browser, acc.B, 'B', log);
+  await A.evaluateOnNewDocument(CAMERA);
   await A.evaluate(() => localStorage.removeItem('aether.effects'));
   const uploads = [];
   A.on('request', (r) => { if (['POST', 'PUT', 'PATCH'].includes(r.method()) && (r.postData()?.length ?? 0) > 2000) uploads.push(r.url()); });
@@ -91,7 +124,8 @@ try {
   await sleep(4000);
 
   const before = await look(B);
-  ok(before && before.detail > 0.5, `B sees A's camera with its detail: ${JSON.stringify(before)}`);
+  ok(before && before.detail > 10, `B sees A's background with its detail: ${JSON.stringify(before)}`);
+  ok(skin(await look(B, FACE)), `and A's face: ${JSON.stringify(await look(B, FACE))}`);
   ok((await fx(A)) === 'off', 'no effect: no pipeline (data-fx=off)');
 
   await A.evaluate(() => { document.getElementById('btn-cam-more').click(); document.getElementById('cam-effects').click(); });
@@ -105,12 +139,17 @@ try {
   const ready = await until(A, () => /:(ready|failed)$/.test(document.documentElement.dataset.fx ?? ''), null, 30000);
   ok(ready && (await fx(A)) === 'blur:ready', `the segmenter loads on this device: ${await fx(A)}`);
   const blurred = await settle(B, (x) => x.detail < before.detail * 0.5);
-  ok(blurred && blurred.detail < before.detail * 0.5, `what B sees of A has lost its detail: ${before.detail.toFixed(1)} -> ${blurred?.detail.toFixed(1)}`);
+  ok(blurred && blurred.detail < before.detail * 0.5, `the background B sees has lost its detail: ${before.detail.toFixed(1)} -> ${blurred?.detail.toFixed(1)}`);
+  const faceBlur = await look(B, FACE);
+  ok(skin(faceBlur), `and the person is kept, not blurred away: face ${JSON.stringify(faceBlur)}`);
+
 
   // A background, then your own image.
   ok(await pick(A, 'Deep teal'), 'A picks the Deep teal background');
   const teal = await settle(B, (x) => Math.abs(x.g - 61) < 25 && x.r < 40);
   ok(teal && Math.abs(teal.r - 15) < 25 && Math.abs(teal.g - 61) < 25 && Math.abs(teal.b - 58) < 25, `B sees the background's colour: ${JSON.stringify(teal)}`);
+  const faceTeal = await look(B, FACE);
+  ok(skin(faceTeal), `in front of it, A's face: ${JSON.stringify(faceTeal)}`);
   const [input] = await A.$$('#view-effects input[data-add]');
   await input.uploadFile(redPNG());
   ok(await until(A, () => document.querySelectorAll('#view-effects .fx-mine').length === 1, null), 'Add new: A\'s image is added');
@@ -144,8 +183,6 @@ try {
   await A.evaluate(() => document.getElementById('btn-cam').click());
   ok(await until(A, () => /^blur:/.test(document.documentElement.dataset.fx ?? ''), null, 10000), 'camera on again: the blur comes back with it');
   ok(await A.evaluate(() => JSON.parse(localStorage.getItem('aether.effects')).background === 'blur'), 'the choice is kept on this device');
-  const cost = await A.evaluate(() => ({ ms: document.documentElement.dataset.fxMs, seg: document.documentElement.dataset.fxSegMs, every: document.documentElement.dataset.fxSegEvery }));
-  console.log(`  pipeline cost on this machine (headless, GPU ${process.env.AETHER_E2E_GPU ? 'on' : 'off'}): ${cost.ms} ms a frame; a segmentation ${cost.seg} ms, every ${cost.every} frame(s)`);
 } catch (e) {
   fail(e);
 } finally {

@@ -406,6 +406,7 @@ func (g *Gateway) run(ctx context.Context, c *Conn, roomID, name string) {
 		if rm.LeaveRecording(p.ID) {
 			g.announceAll(rm, encodeRecState(rm.Recording()))
 		}
+		rm.LeaveTogether(p.ID)
 		// Left a breakout room: the managers' list counts one fewer.
 		if parent := room.BreakoutParent(roomID); parent != "" {
 			if prm, ok := g.Rooms.Get(parent); ok {
@@ -475,6 +476,11 @@ func (g *Gateway) run(ctx context.Context, c *Conn, roomID, name string) {
 	// before they say anything. Nothing if neither.
 	if rs := rm.Recording(); rs.Recording || rs.Transcribing || rs.Captions {
 		c.Emit(encodeRecState(rs))
+	}
+
+	// Together mode, if it is on: the arrival takes their seat.
+	if ts := rm.Together(); ts.On {
+		c.Emit(encodeTogether(ts))
 	}
 
 	// Whose mic or camera a host has disabled -- this arrival's own included,
@@ -725,6 +731,9 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 
 	case wire.OpRecording:
 		return g.handleRecording(context.Background(), rm, p, r)
+
+	case wire.OpTogether:
+		return g.handleTogether(rm, p, r)
 
 	case wire.OpSetRole:
 		id := r.Str()

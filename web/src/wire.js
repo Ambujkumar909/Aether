@@ -92,6 +92,7 @@ export const Op = {
   Notes: 0x126,
   // The whiteboard: open, strokes, live previews, erase, notes, clear, close.
   Whiteboard: 0x127,
+  Together: 0x128,
 };
 
 // Which of the two peer connections a signalling frame concerns.
