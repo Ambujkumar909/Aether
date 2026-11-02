@@ -365,6 +365,9 @@ export const messaging = {
   teamCode: (id) => api.post(`/api/messaging/teams/${encodeURIComponent(id)}/code`, {}),
   removeTeamCode: (id) => api.del(`/api/messaging/teams/${encodeURIComponent(id)}/code`),
   createTeamChannel: (id, name, topic, isPrivate) => api.post(`/api/messaging/teams/${encodeURIComponent(id)}/channels`, { name, topic, private: isPrivate }),
+  activity: ({ before = '', kind = '', unread = false, limit = 50 } = {}) =>
+    api.get('/api/messaging/activity?' + qs({ before, kind, unread: unread ? '1' : '', limit })),
+  readActivity: (ids, all = false) => api.post('/api/messaging/activity/read', { ids, all }),
   browseChannels: (q = '', limit = 50) => api.get('/api/messaging/channels?' + qs({ q, limit })),
   joinChannel: (id) => api.post(`/api/messaging/channels/${encodeURIComponent(id)}/join`, {}),
   leave: (id) => api.post(`/api/messaging/conversations/${encodeURIComponent(id)}/leave`, {}),

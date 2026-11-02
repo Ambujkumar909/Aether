@@ -477,6 +477,10 @@ func (r *SQLRepository) SoftDeleteMessage(ctx context.Context, id string) error 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM messaging_messages_fts WHERE id = ?`, id); err != nil {
 		return err
 	}
+	// A deleted message is nobody's activity any more.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messaging_activity WHERE message_id = ?`, id); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

@@ -79,6 +79,9 @@ func TestAScheduledMessageIsTheAuthorsAloneUntilItsTime(t *testing.T) {
 	if list, _ := s.List(ctx, you); list[0].Unread != 0 || list[0].Mentions != 0 || list[0].Preview != "" {
 		t.Fatalf("counted or previewed before delivery: unread %d mentions %d preview %q", list[0].Unread, list[0].Mentions, list[0].Preview)
 	}
+	if items, _, _ := s.Activities(ctx, you, "", "", false, 10); len(items) != 0 {
+		t.Fatalf("a scheduled mention is activity before its time: %+v", items)
+	}
 	if n := s.DeliverDueNow(ctx); n != 0 {
 		t.Fatalf("delivered %d before its time", n)
 	}
@@ -107,6 +110,9 @@ func TestAScheduledMessageIsTheAuthorsAloneUntilItsTime(t *testing.T) {
 	if theirs[0].CreatedAt.Before(deliveredAt.Add(-time.Second)) {
 		t.Fatalf("a delivered message keeps its composition time (%s); it should be stamped at delivery (%s)",
 			theirs[0].CreatedAt, deliveredAt)
+	}
+	if items, _, _ := s.Activities(ctx, you, "", "", false, 10); len(items) != 1 || items[0].Kind != ActivityMention || items[0].MessageID != m.ID {
+		t.Fatalf("the mention is activity once delivered: %+v", items)
 	}
 	list, _ := s.List(ctx, you)
 	if list[0].Unread != 1 || list[0].Mentions != 1 || list[0].Preview != "good morning" {

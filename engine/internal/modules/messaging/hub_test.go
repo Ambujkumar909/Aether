@@ -171,13 +171,11 @@ func TestPushEncodeAndQueueAreAtomic(t *testing.T) {
 	defer readCancel()
 
 	seen := 0
+	in := &frames{cli: cli}
 	for seen < total {
-		typ, data, err := cli.Read(readCtx)
+		data, err := in.next(readCtx)
 		if err != nil {
 			t.Fatalf("after %d frames: read: %v", seen, err)
-		}
-		if typ != websocket.MessageBinary {
-			t.Fatalf("frame %d is not binary", seen)
 		}
 		r := wire.NewReader(data, rx)
 		hdr, err := r.ReadHeader()
@@ -468,5 +466,109 @@ func TestHubBookkeepingUnderConcurrency(t *testing.T) {
 	h.mu.RUnlock()
 	if left != 0 {
 		t.Fatalf("%d user entries left in the map; empty sets are not being pruned", left)
+	}
+}
+
+// frames reads what a client receives one frame at a time, unpacking the
+// writer's batches (writePump coalesces) in order.
+type frames struct {
+	cli     *websocket.Conn
+	pending [][]byte
+	batches int
+}
+
+func (f *frames) next(ctx context.Context) ([]byte, error) {
+	for len(f.pending) == 0 {
+		typ, data, err := f.cli.Read(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if typ != websocket.MessageBinary {
+			return nil, fmt.Errorf("a %v message", typ)
+		}
+		r := wire.NewReader(data, nil)
+		hdr, err := r.ReadHeader()
+		if err != nil {
+			return nil, err
+		}
+		if hdr.Op != wire.OpBatch {
+			f.pending = append(f.pending, data)
+			continue
+		}
+		f.batches++
+		if err := wire.SplitBatch(r, func(b []byte) error {
+			f.pending = append(f.pending, append([]byte(nil), b...))
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	out := f.pending[0]
+	f.pending = f.pending[1:]
+	return out, nil
+}
+
+// The writer coalesces: frames pushed together leave as one batch, in order;
+// a frame alone leaves alone, unwrapped; and closing while a frame is held
+// neither hangs nor leaks the writer.
+func TestWriterCoalesces(t *testing.T) {
+	noLeaks(t)
+	h := NewHub(quietLog())
+	s, cli, rx := newSock(t, h, "u1", 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.writePump(ctx)
+
+	// Spaced inside the window, as a message and its activity row are (the
+	// writer has already woken for the first when the next arrives).
+	for i := range 3 {
+		h.PushTyping("u1", fmt.Sprintf("conv-%d", i), "Ada", "u-ada", true)
+		time.Sleep(coalesceWindow / 5)
+	}
+	rc, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer rcancel()
+	_, data, err := cli.Read(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := wire.NewReader(data, nil)
+	if hdr, _ := r.ReadHeader(); hdr.Op != wire.OpBatch {
+		t.Fatalf("three frames pushed together left as op %v, not one batch", hdr.Op)
+	}
+	var got []string
+	if err := wire.SplitBatch(r, func(b []byte) error {
+		fr := wire.NewReader(b, rx)
+		if hdr, err := fr.ReadHeader(); err != nil || hdr.Op != wire.OpTyping {
+			return fmt.Errorf("inner op %v: %v", hdr.Op, err)
+		}
+		got = append(got, fr.Str())
+		return fr.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "conv-0,conv-1,conv-2" {
+		t.Fatalf("batch order: %v", got)
+	}
+
+	// Alone, later: unwrapped.
+	time.Sleep(4 * coalesceWindow)
+	h.PushTyping("u1", "conv-9", "Ada", "u-ada", false)
+	_, data, err = cli.Read(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr, _ := wire.NewReader(data, nil).ReadHeader(); hdr.Op != wire.OpTyping {
+		t.Fatalf("a lone frame left as op %v", hdr.Op)
+	}
+
+	// Closed while holding one.
+	h.PushTyping("u1", "conv-10", "Ada", "u-ada", true)
+	s.close("test")
+	done := make(chan struct{})
+	go func() { _, _, _ = cli.Read(rc); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client never saw the socket end")
 	}
 }

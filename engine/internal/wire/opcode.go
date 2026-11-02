@@ -210,6 +210,10 @@ const (
 	// OpTogether: Together mode (room/together.go, signal/together.go): on or
 	// off for everyone and the scene, and each person's 64 x 36 outline.
 	OpTogether Op = 0x128
+
+	// OpActivity: the activity feed on the chat socket (messaging/activity.go):
+	// a new item, ids that became read, an item taken back.
+	OpActivity Op = 0x129
 )
 
 var ErrBadVersion = errors.New("wire: unsupported protocol version")

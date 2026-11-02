@@ -542,11 +542,17 @@ func (s *Service) AddTeamMembers(ctx context.Context, a Actor, teamID string, em
 			skipped = append(skipped, e)
 			continue
 		}
+		if r, _ := s.repo.TeamRole(ctx, t.ID, uid); r != "" {
+			continue // already on it: nothing happened to them
+		}
 		if err := s.join(ctx, a, t, TeamMember{UserID: uid, Email: e, Name: name, Role: RoleMember, JoinedAt: time.Now().UTC()}, "added "+nameOr(name, e)+" to the team"); err != nil {
 			if errors.Is(err, ErrTeamFull) {
 				return skipped, err
 			}
 			return skipped, err
+		}
+		if uid != a.ID {
+			s.recordActivity(ctx, []activityRow{{id: newID(), userID: uid, kind: ActivityTeam, actorID: a.ID, actorName: a.Name, teamID: t.ID, at: time.Now().UTC()}})
 		}
 	}
 	return skipped, nil

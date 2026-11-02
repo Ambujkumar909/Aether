@@ -59,6 +59,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/messaging/conversations/{id}/unread", p(h.markUnread))
 	mux.Handle("DELETE /api/messaging/conversations/{id}", p(h.forget))
 	h.teamRoutes(mux, p)
+	h.activityRoutes(mux, p)
 	mux.Handle("POST /api/messaging/channels", p(h.createChannel))
 	mux.Handle("GET /api/messaging/channels", p(h.browseChannels))
 	mux.Handle("POST /api/messaging/channels/{id}/join", p(h.joinChannel))

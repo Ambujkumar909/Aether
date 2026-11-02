@@ -123,9 +123,14 @@ ARCHITECTURE §6bn (a WebGL compositor built, measured as no gain, removed; §6b
 
 ARCHITECTURE §6bp; migrations 0060-0066, `messaging/teams.go` + `teams_handler.go` + `teams_test.go`, team rules in `channels.go`, Teams surface in `chat.js` (`renderTeamsSurface`), rail button in `index.html`, `tools/e2e/teams.e2e.mjs`, Teams screens in the layout harness.
 
+## Batch 17 — done: the activity feed; coalescing on the chat socket
+
+ARCHITECTURE §6bq; migration 0067, `messaging/activity.go` (+ `activity_test.go`), `OpActivity` 0x129, hooks in `service.go` / `compose.go` / `teams.go` / `repository.go`, chat-socket coalescing in `hub.go` (`writePump`, `TestWriterCoalesces`), Activity surface at the end of `chat.js`, `tools/e2e/activity.e2e.mjs`, `tools/e2e/measure-activity.mjs`. Gotchas: `.unread` is the global badge class (do not reuse it for row state); raw socket clients must read every frame that interns strings, or their dictionary falls behind.
+
 ## Next, in order
 
-1. Beyond meetings: an activity feed, calendar views with a scheduling assistant.
+1. A 50-person stress and scale harness across every feature (requested): meetings, chat, channels, teams, activity, whiteboard, Together.
+2. Calendar views with a scheduling assistant.
 2. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
 3. Remaining chat items (see TEAMS_PARITY "Not built" rows).
 

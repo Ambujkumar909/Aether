@@ -265,8 +265,27 @@ const SCREENS = [
     },
   },
   {
+    // Activity: the feed (activity.e2e.mjs leaves A some), then one opened.
+    name: 'activity',
+    go: async (page) => {
+      await page.evaluate(() => document.querySelector('[data-cancel]')?.click());
+      await sleep(200);
+      await page.evaluate(() => document.querySelector('[data-home="activity"]')?.click());
+      await sleep(1000);
+    },
+  },
+  {
+    name: 'activity-open',
+    go: async (page) => {
+      await page.evaluate(() => document.querySelector('#act-list .act-item')?.click());
+      await sleep(1000);
+    },
+  },
+  {
     name: 'calendar',
     go: async (page) => {
+      await page.evaluate(() => document.getElementById('c-back')?.click());
+      await sleep(200);
       await page.evaluate(() => document.querySelector('[data-cancel]')?.click());
       await sleep(200);
       await page.evaluate(() => document.querySelector('[data-home="calendar"]')?.click());

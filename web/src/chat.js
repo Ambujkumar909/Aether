@@ -5,7 +5,7 @@
 // is built on: never spend bandwidth in proportion to how long a tab is open.
 
 import { messaging, directory, session, ApiError, deviceId } from './api.js';
-import { Writer, Reader, Op, newDictPair } from './wire.js';
+import { Writer, Reader, Op, newDictPair, splitBatch } from './wire.js';
 import { initials, avatarAttrs } from './avatar.js';
 import { attachPicker, isOnlyEmoji, pickEmoji, closeEmojiMenu } from './emoji.js';
 import { whenFull } from './when.js';
@@ -254,6 +254,8 @@ function openSocket() {
 
   ws.onopen = () => {
     state.reconnectDelay = 1000;
+    // Pushes missed while the socket was down: the count from the source.
+    syncActivity();
     startIdleWatch();
     sendIdle(idleWatch.idle);
     // A one byte heartbeat, same as the meeting socket.
@@ -266,10 +268,10 @@ function openSocket() {
     }, 25000);
   };
 
-  ws.onmessage = (ev) => {
-    const r = new Reader(new Uint8Array(ev.data), state.dicts.rx);
-    const h = r.header();
-    if (!h) return;
+  // One frame. The server coalesces frames that leave within a few
+  // milliseconds of each other into one Batch (hub.go, writePump); the
+  // frames inside decode in order against the same dictionary.
+  const onFrame = (h, r) => {
 
     if (h.op === Op.ConvMessage) {
       const m = {
@@ -406,6 +408,23 @@ function openSocket() {
       if (r.err) return;
       if (state.typing.set(convId, whoId, who, on)) paintTyping(convId);
       armTypingTimer();
+    } else if (h.op === Op.Activity) {
+      onActivityFrame(r);
+    }
+  };
+
+  ws.onmessage = (ev) => {
+    const r = new Reader(new Uint8Array(ev.data), state.dicts.rx);
+    const h = r.header();
+    if (!h) return;
+    if (h.op === Op.Batch) {
+      splitBatch(r, (f) => {
+        const fr = new Reader(f, state.dicts.rx);
+        const fh = fr.header();
+        if (fh) onFrame(fh, fr);
+      });
+    } else {
+      onFrame(h, r);
     }
   };
 
@@ -996,6 +1015,7 @@ function renderChatSurfaceFilters() {
 
 function renderList() {
   if (state.surface === 'teams') return renderTeamsList();
+  if (state.surface === 'activity') return renderActivityList();
   const box = $('conv-list');
   if (!box) return;
   const q = ($('c-search')?.value ?? '').toLowerCase();
@@ -1281,7 +1301,7 @@ function renderThread() {
   if (!state.active) {
     box.innerHTML = `<div class="thread-empty">
       <span class="avatar lg">💬</span>
-      <p>Pick a conversation, or start a new one.</p>
+      <p>${state.surface === 'activity' ? 'Choose an item to read it where it happened.' : 'Pick a conversation, or start a new one.'}</p>
     </div>`;
     return;
   }
@@ -5158,4 +5178,329 @@ function teamWarn(msg) {
   el.className = 'toast show bad';
   clearTimeout(toastErr._t);
   toastErr._t = setTimeout(() => (el.className = 'toast'), 4000);
+}
+
+// ---------------------------------------------------------------------------
+// Activity: mentions, replies, reactions and team adds (messaging/activity.go).
+//
+// One list of everything this client knows, newest first; every view is a
+// filter of it, so a filter answers at once and the server's page merges in
+// when it lands. Pushes add, mark read and take back; the count on the badge
+// is always the server's, carried on every frame.
+// ---------------------------------------------------------------------------
+const activity = { items: [], unread: 0, filter: 'all', more: false, seq: 0, loaded: false };
+const ACT_FILTERS = [
+  ['all', 'All'],
+  ['unread', 'Unread'],
+  ['mention', 'Mentions'],
+  ['reply', 'Replies'],
+  ['reaction', 'Reactions'],
+  ['team', 'Teams'],
+];
+
+function paintActivityBadge() {
+  const b = $('activity-badge');
+  if (!b) return;
+  const n = activity.unread;
+  b.textContent = n > 99 ? '99+' : String(n);
+  b.classList.toggle('hidden', n === 0);
+}
+
+function mergeActivity(items) {
+  const byId = new Map(activity.items.map((x) => [x.id, x]));
+  for (const x of items) byId.set(x.id, x);
+  activity.items = [...byId.values()].sort((a, b) => (a.at === b.at ? (a.id < b.id ? 1 : -1) : a.at < b.at ? 1 : -1));
+}
+
+async function syncActivity() {
+  try {
+    const res = await messaging.activity({ limit: 50 });
+    activity.unread = res.unread ?? 0;
+    mergeActivity(res.items ?? []);
+    activity.loaded = true;
+    paintActivityBadge();
+    if (state.surface === 'activity') renderActivityList();
+  } catch {
+    /* the next push or open tries again */
+  }
+}
+
+function onActivityFrame(r) {
+  const kind = r.bits(2);
+  r.bits(6);
+  if (kind === 0) {
+    const f = [];
+    for (let i = 0; i < 12; i++) f.push(r.str());
+    const at = new Date(Number(r.uvarint())).toISOString();
+    const read = r.bool();
+    r.bits(7);
+    const snippet = new TextDecoder().decode(r.blob());
+    const unread = Number(r.uvarint());
+    if (r.err) return;
+    const [id, k, actorId, actorName, conversationId, conversationKind, conversationTitle, teamId, teamName, messageId, rootId, emoji] = f;
+    actFresh.add(id);
+    mergeActivity([{ id, kind: k, actorId, actorName, conversationId, conversationKind, conversationTitle, teamId, teamName, messageId, rootId, emoji, snippet, at, read }]);
+    activity.unread = unread;
+  } else if (kind === 1) {
+    const n = Number(r.uvarint());
+    const ids = new Set();
+    for (let i = 0; i < n && !r.err; i++) ids.add(r.str());
+    const unread = Number(r.uvarint());
+    if (r.err) return;
+    for (const x of activity.items) if (ids.has(x.id)) x.read = true;
+    activity.unread = unread;
+  } else if (kind === 2) {
+    const id = r.str();
+    const unread = Number(r.uvarint());
+    if (r.err) return;
+    activity.items = activity.items.filter((x) => x.id !== id);
+    activity.unread = unread;
+  }
+  paintActivityBadge();
+  if (state.surface === 'activity') renderActivityList();
+}
+
+const actMatches = (x, f) => f === 'all' || (f === 'unread' ? !x.read : x.kind === f);
+
+function actWhere(x) {
+  if (x.kind === 'team') return x.teamName;
+  if (x.teamName) return `${x.teamName} › ${x.conversationTitle}`;
+  const c = state.conversations.find((y) => y.id === x.conversationId);
+  if (c) return whoOf(c).name;
+  if (x.conversationKind === 'direct') return 'Chat';
+  return x.conversationTitle || 'Group chat';
+}
+
+// Who did it, for a group: "Ada", "Ada and Ben", "Ada, Ben and 3 others".
+function actWho(g) {
+  const names = [...new Set(g.items.map((x) => x.actorName || 'Someone'))];
+  const b = (n) => `<b>${esc(n)}</b>`;
+  if (names.length === 1) return b(names[0]);
+  if (names.length === 2) return `${b(names[0])} and ${b(names[1])}`;
+  const rest = names.length - 2;
+  return `${b(names[0])}, ${b(names[1])} and ${rest} ${rest === 1 ? 'other' : 'others'}`;
+}
+
+function actLine(g) {
+  const x = g.items[0];
+  const who = actWho(g);
+  switch (x.kind) {
+    case 'mention':
+      return `${who} mentioned you`;
+    case 'reply':
+      return `${who} replied to you`;
+    case 'reaction': {
+      const em = [...new Set(g.items.map((y) => y.emoji))].map((e) => `<span class="act-emoji">${esc(e)}</span>`).join('');
+      return `${who} reacted ${em}`;
+    }
+    case 'team':
+      return `${who} added you to <b>${esc(x.teamName)}</b>`;
+    default:
+      return who;
+  }
+}
+
+// The mark on the avatar's corner: what kind of thing happened. (A
+// reaction's emoji are in its line.)
+function actMark(g) {
+  const x = g.items[0];
+  const icon = { mention: 'i-at', reply: 'i-reply', reaction: 'i-heart', team: 'i-people' }[x.kind];
+  return icon ? `<span class="act-mark" aria-hidden="true"><svg width="10" height="10" viewBox="0 0 24 24"><use href="#${icon}"/></svg></span>` : '';
+}
+
+// Which section an item sits in: Today, Yesterday, a weekday this week, then
+// the date.
+function actDay(iso) {
+  const d = new Date(iso);
+  const start = (t) => new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+  const days = Math.round((start(new Date()) - start(d)) / 86400000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return d.toLocaleDateString([], { weekday: 'long' });
+  return d.toLocaleDateString([], { day: 'numeric', month: 'long', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+
+// Sections of groups. Reactions to one message within a section fold into
+// one row; everything else is a row of its own.
+function actSections(items) {
+  const sections = [];
+  let cur = null;
+  let folded = new Map();
+  for (const x of items) {
+    const day = actDay(x.at);
+    if (!cur || cur.day !== day) {
+      cur = { day, groups: [] };
+      sections.push(cur);
+      folded = new Map();
+    }
+    if (x.kind === 'reaction' && folded.has(x.messageId)) {
+      folded.get(x.messageId).items.push(x);
+      continue;
+    }
+    const g = { items: [x] };
+    if (x.kind === 'reaction') folded.set(x.messageId, g);
+    cur.groups.push(g);
+  }
+  return sections;
+}
+
+const actTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+// Ids that arrived by push since the list was last drawn: drawn once with
+// the arrival tint.
+const actFresh = new Set();
+
+export async function renderActivitySurface() {
+  state.surface = 'activity';
+  state.active = null;
+  const main = document.querySelector('.home-main');
+  main.innerHTML = `
+    <div class="chat-shell activity-shell">
+      <aside class="conv-col activity-col">
+        <div class="conv-head">
+          <h1>Activity</h1>
+          <button class="icon-btn" id="act-all-read" title="Mark all as read" aria-label="Mark all as read">
+            <svg width="18" height="18" viewBox="0 0 24 24"><use href="#i-check-double"/></svg>
+          </button>
+        </div>
+        <div class="act-filters pills" role="tablist" aria-label="Show">
+          ${ACT_FILTERS.map(([k, label]) => `<button class="pill-f${activity.filter === k ? ' active' : ''}" role="tab" aria-selected="${activity.filter === k}" data-act-filter="${k}">${label}</button>`).join('')}
+        </div>
+        <div class="act-list" id="act-list" role="list"></div>
+      </aside>
+      <section class="thread" id="thread"></section>
+    </div>`;
+  $('act-all-read').onclick = async () => {
+    for (const x of activity.items) x.read = true;
+    activity.unread = 0;
+    paintActivityBadge();
+    renderActivityList();
+    try {
+      const res = await messaging.readActivity([], true);
+      activity.unread = res.unread ?? 0;
+      paintActivityBadge();
+    } catch (e) {
+      toastErr(e);
+      syncActivity();
+    }
+  };
+  main.querySelectorAll('[data-act-filter]').forEach((b) => {
+    b.onclick = () => {
+      activity.filter = b.dataset.actFilter;
+      main.querySelectorAll('[data-act-filter]').forEach((x) => {
+        x.classList.toggle('active', x === b);
+        x.setAttribute('aria-selected', String(x === b));
+      });
+      renderActivityList();
+      loadActivity();
+    };
+  });
+  renderThread();
+  renderActivityList();
+  if (!state.conversations.length) refresh().then(() => renderActivityList()).catch(() => {});
+  await loadActivity();
+}
+
+// One page from the server for the current filter, merged; an answer for a
+// filter that is no longer chosen is dropped.
+async function loadActivity(before = '') {
+  const seq = ++activity.seq;
+  const f = activity.filter;
+  try {
+    const res = await messaging.activity({
+      before,
+      kind: f === 'all' || f === 'unread' ? '' : f,
+      unread: f === 'unread',
+      limit: 50,
+    });
+    if (seq !== activity.seq) return;
+    mergeActivity(res.items ?? []);
+    activity.unread = res.unread ?? 0;
+    activity.more = (res.items ?? []).length === 50;
+    activity.loaded = true;
+    paintActivityBadge();
+    renderActivityList();
+  } catch (e) {
+    if (seq === activity.seq) toastErr(e);
+  }
+}
+
+function renderActivityList() {
+  const box = $('act-list');
+  if (!box) return;
+  const items = activity.items.filter((x) => actMatches(x, activity.filter));
+  if (!items.length) {
+    const empty = {
+      all: ['No activity yet', 'When someone mentions you, replies to you, reacts to something you wrote or adds you to a team, it is listed here.'],
+      unread: ['No unread activity', 'Everything here has been read.'],
+      mention: ['No mentions', 'Messages that @mention you are listed here.'],
+      reply: ['No replies', 'Replies to your messages are listed here.'],
+      reaction: ['No reactions', 'Reactions to your messages are listed here.'],
+      team: ['No team invitations', 'When someone adds you to a team, it is listed here.'],
+    }[activity.filter];
+    box.innerHTML = activity.loaded ? `<div class="act-empty"><p class="act-empty-h">${empty[0]}</p><p>${empty[1]}</p></div>` : '';
+    return;
+  }
+  const row = (g) => {
+    const x = g.items[0];
+    const unread = g.items.some((y) => !y.read);
+    const on = state.active && x.conversationId === state.active.id;
+    const fresh = g.items.some((y) => actFresh.has(y.id));
+    const where = actWhere(x);
+    return `<button class="act-item${unread ? ' is-unread' : ''}${on ? ' active' : ''}${fresh ? ' fresh' : ''}" role="listitem" data-act="${esc(x.id)}">
+        <span class="act-face"><span ${avatarAttrs({ id: x.actorId, name: x.actorName })}>${esc(initials({ name: x.actorName }))}</span>${actMark(g)}</span>
+        <span class="act-body">
+          <span class="act-top"><span class="act-line">${actLine(g)}</span><time class="act-when" datetime="${esc(x.at)}">${esc(actTime(x.at))}</time></span>
+          ${where && x.kind !== 'team' ? `<span class="act-where">${esc(where)}</span>` : ''}
+          ${x.snippet ? `<span class="act-snippet">${esc(x.snippet)}</span>` : ''}
+        </span>
+      </button>`;
+  };
+  box.innerHTML =
+    actSections(items)
+      .map((sec) => `<section class="act-sec" aria-label="${esc(sec.day)}"><h2 class="act-day">${esc(sec.day)}</h2>${sec.groups.map(row).join('')}</section>`)
+      .join('') + (activity.more ? `<button class="btn act-more" id="act-more">Show older</button>` : '');
+  actFresh.clear();
+  const groups = new Map(actSections(items).flatMap((sec) => sec.groups.map((g) => [g.items[0].id, g])));
+  box.querySelectorAll('[data-act]').forEach((b) => {
+    b.onclick = () => openActivity(groups.get(b.dataset.act));
+  });
+  const more = $('act-more');
+  if (more) {
+    more.onclick = () => {
+      const last = items[items.length - 1];
+      loadActivity(`${new Date(last.at).getTime()}:${last.id}`);
+    };
+  }
+}
+
+async function openActivity(g) {
+  if (!g) return;
+  const x = g.items[0];
+  const ids = g.items.filter((y) => !y.read).map((y) => y.id).slice(0, 100);
+  if (ids.length) {
+    for (const y of g.items) y.read = true;
+    activity.unread = Math.max(0, activity.unread - ids.length);
+    paintActivityBadge();
+    renderActivityList();
+    messaging
+      .readActivity(ids)
+      .then((res) => {
+        activity.unread = res.unread ?? activity.unread;
+        paintActivityBadge();
+      })
+      .catch(() => syncActivity());
+  }
+  if (x.kind === 'team') {
+    document.querySelector('[data-home="teams"]')?.click();
+    return;
+  }
+  try {
+    // A reply in a channel lives in its root's thread.
+    const channelReply = x.conversationKind === 'channel' && x.rootId;
+    await openConversationAt(x.conversationId, channelReply ? x.rootId : x.messageId);
+    if (channelReply) await openThread(x.rootId);
+    renderActivityList();
+  } catch (e) {
+    toastErr(e);
+  }
 }

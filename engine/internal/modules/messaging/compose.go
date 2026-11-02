@@ -134,6 +134,7 @@ func (s *Service) deliverDue(ctx context.Context) int {
 				s.hub.PushMessage(uid, m)
 			}
 		}
+		s.activityForMessage(ctx, m)
 		n++
 	}
 	return n

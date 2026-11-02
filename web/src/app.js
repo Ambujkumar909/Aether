@@ -33,6 +33,7 @@ import {
   connectChatSocket,
   renderChatSurface,
   renderTeamsSurface,
+  renderActivitySurface,
   refresh as refreshChat,
   frequentContacts,
   directWith,
@@ -7352,7 +7353,9 @@ async function enterHome() {
   // Rendering first and filling in afterwards makes the page visibly reflow
   // under the reader, which is worse than a moment of nothing.
   await Promise.all([loadMeetings(), refreshChat()]);
-  renderHome();
+  // Only if the person is still on it: a rail button pressed while this
+  // loaded has already drawn their choice, and must not be painted over.
+  if (!state.homeTab || state.homeTab === 'meet') renderHome();
 
   // A link of the form /?room=weekly-sync joins straight through once the
   // session is established.
@@ -7429,6 +7432,7 @@ function wireHome() {
       if (state.homeTab === 'calendar') renderCalendar();
       else if (state.homeTab === 'chat') renderChatSurface();
       else if (state.homeTab === 'teams') renderTeamsSurface();
+      else if (state.homeTab === 'activity') renderActivitySurface();
       else renderHome();
     };
   });

@@ -360,6 +360,15 @@ type Repository interface {
 	DeleteTeam(ctx context.Context, teamID string) error
 	CountTeamChannels(ctx context.Context, teamID string) (int, error)
 
+	// The activity feed (activity.go).
+	AddActivity(ctx context.Context, rows []activityRow) error
+	ActivityPage(ctx context.Context, userID string, beforeAt int64, beforeID, kind string, unread bool, limit int) ([]*Activity, error)
+	ActivityByIDs(ctx context.Context, ids []string) ([]*Activity, error)
+	ActivityUnread(ctx context.Context, userID string) (int, error)
+	MarkActivityRead(ctx context.Context, userID string, ids []string, all bool) ([]string, error)
+	MarkActivityReadIn(ctx context.Context, userID, convID string) ([]string, error)
+	RemoveReactionActivity(ctx context.Context, messageID, actorID, emoji string) (userID, id string, err error)
+
 	// Blocks.
 	Block(ctx context.Context, userID, blockedID string, at time.Time) error
 	Unblock(ctx context.Context, userID, blockedID string) error

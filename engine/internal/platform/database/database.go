@@ -741,6 +741,25 @@ var migrations = []migration{
 		CREATE UNIQUE INDEX IF NOT EXISTS messaging_channels_team_name
 			ON messaging_conversations(team_id, title_key) WHERE kind = 'channel';
 		CREATE INDEX IF NOT EXISTS messaging_conversations_team ON messaging_conversations(team_id, kind)`},
+	// The activity feed (messaging/activity.go): one row per person per
+	// event, naming the message or the team; both cascade. The feed walks
+	// (user, time); the cascades and the reaction take-back walk the other two.
+	{"0067_messaging_activity", `
+		CREATE TABLE IF NOT EXISTS messaging_activity (
+			id         TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			actor_id   TEXT NOT NULL,
+			actor_name TEXT NOT NULL DEFAULT '',
+			message_id TEXT REFERENCES messaging_messages(id) ON DELETE CASCADE,
+			team_id    TEXT REFERENCES messaging_teams(id) ON DELETE CASCADE,
+			emoji      TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			read       INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS messaging_activity_feed ON messaging_activity(user_id, created_at DESC, id DESC);
+		CREATE INDEX IF NOT EXISTS messaging_activity_message ON messaging_activity(message_id) WHERE message_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS messaging_activity_team ON messaging_activity(team_id) WHERE team_id IS NOT NULL`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

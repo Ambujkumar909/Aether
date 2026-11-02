@@ -283,6 +283,7 @@ func (s *Service) React(ctx context.Context, a Actor, messageID, emoji string, o
 	if _, err := s.repo.React(ctx, messageID, a.ID, emoji, on); err != nil {
 		return err
 	}
+	s.reactionActivity(ctx, a, m, emoji, on)
 
 	// Everybody in the conversation sees it, including the person who did it:
 	// their own client then draws from the same source as everybody else's
@@ -644,6 +645,7 @@ func (s *Service) postWith(ctx context.Context, a Actor, convID, body, replyTo s
 		s.Decorate(ctx, a, []*Message{m})
 	}
 	s.fanout(ctx, convID, a.ID, a.Device, m)
+	s.activityForMessage(ctx, m)
 	s.typingEnded(ctx, a, convID)
 	return m, nil
 }
@@ -705,6 +707,7 @@ func (s *Service) MarkRead(ctx context.Context, a Actor, convID string) error {
 	if err := s.repo.MarkRead(ctx, convID, a.ID, at); err != nil {
 		return err
 	}
+	s.readActivityIn(ctx, a.ID, convID)
 	// "Seen by" is true rather than eventual: the others learn now, and so
 	// do this person's other devices (which is why the actor is included).
 	for _, id := range s.smallAudience(ctx, convID) {

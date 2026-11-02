@@ -55,6 +55,8 @@ replies, reactions, mentions, edits with history, forwarding, files, voice messa
 scheduled send, read receipts, typing indicators and presence that knows when you are in a call.
 **Teams** hold channels: public ones anyone in your organisation can find, private ones
 reached by a seven-character code, each with a General channel and private channels inside.
+**Activity** gathers what concerns you (mentions, replies, reactions, team invitations), grouped
+by day, with reactions to one message folded into one line, live on every device.
 
 </td>
 <td width="50%" valign="top">
@@ -316,7 +318,7 @@ with the numbers in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - **Spatial audio** for Together mode, and segmentation in a worker so effects cost the page
   nothing. (A GPU compositor was built, measured as no faster, and removed.)
-- **An activity feed**, and calendar views with a scheduling assistant.
+- **Calendar views** with a scheduling assistant.
 - **Server-side recording** linked from the meeting chat, and a Word transcript.
 - **Native mobile apps.** The web client already adapts to phones today.
 

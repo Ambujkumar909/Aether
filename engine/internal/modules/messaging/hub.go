@@ -527,22 +527,75 @@ func (s *sock) close(reason string) {
 }
 
 // writePump drains the outbound queue.
+// Coalescing. One event usually pushes several frames to the same person
+// within a millisecond -- a message and the activity row it caused, a
+// reaction's updated message and its activity row -- and each frame used to
+// leave as its own WebSocket message and its own TCP segment, paying the
+// packet headers (44 B on loopback, more on a real link and inside TLS) once
+// per frame. Measured in ARCHITECTURE 6bq: the message and the activity row
+// of one mention left 0.4 ms apart in two segments. So the writer holds the
+// first frame for up to coalesceWindow and sends whatever else arrives with
+// it as one OpBatch; a frame that arrives alone leaves alone, unwrapped.
+//
+// The cost is up to coalesceWindow of added latency on a push, which is
+// below anything a person can see in a chat; the meeting socket holds 15 ms.
+const (
+	coalesceWindow   = 5 * time.Millisecond
+	coalesceMaxCount = 32
+	coalesceMaxBytes = 32 << 10
+)
+
 func (s *sock) writePump(ctx context.Context) {
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+	batch := make([][]byte, 0, coalesceMaxCount)
 	for {
+		var first []byte
 		select {
 		case <-ctx.Done():
 			return
-		case frame, ok := <-s.out:
+		case f, ok := <-s.out:
 			if !ok {
 				return
 			}
-			wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := s.ws.Write(wctx, websocket.MessageBinary, frame)
-			cancel()
-			if err != nil {
-				s.close("write failed")
+			first = f
+		}
+		batch = append(batch[:0], first)
+		size := len(first)
+		timer.Reset(coalesceWindow)
+	collect:
+		for len(batch) < coalesceMaxCount && size < coalesceMaxBytes {
+			select {
+			case f, ok := <-s.out:
+				if !ok {
+					break collect // closed: send what is held; the next receive returns
+				}
+				batch = append(batch, f)
+				size += len(f)
+			case <-timer.C:
+				break collect
+			case <-ctx.Done():
 				return
 			}
+		}
+		timer.Stop()
+
+		frame := batch[0]
+		if len(batch) > 1 {
+			w := wire.NewWriter(nil)
+			if err := wire.EncodeBatch(w, batch); err != nil {
+				s.close("batch failed")
+				return
+			}
+			frame = w.Bytes()
+		}
+		wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := s.ws.Write(wctx, websocket.MessageBinary, frame)
+		cancel()
+		if err != nil {
+			s.close("write failed")
+			return
 		}
 	}
 }

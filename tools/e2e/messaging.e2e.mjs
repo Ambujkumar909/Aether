@@ -15,7 +15,7 @@
 import { connect as tlsConnect } from 'node:tls';
 import { randomBytes, createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { Reader, Writer, Op, newDictPair } from '../../web/src/wire.js';
+import { Reader, Writer, Op, newDictPair, splitBatch } from '../../web/src/wire.js';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // the dev certificate is self-signed
 const BASE = process.argv[2] || 'https://localhost:8443';
@@ -182,11 +182,26 @@ function openPush(client, device = '') {
     let upgraded = false;
     const dicts = newDictPair();
 
+    // The server coalesces frames that leave together into one Batch: each
+    // inner frame is delivered on its own, in order.
     const deliver = (bytes) => {
       const r = new Reader(new Uint8Array(bytes), dicts.rx);
       const h = r.header();
       if (!h) return;
+      if (h.op === Op.Batch) {
+        splitBatch(r, (inner) => deliver(Buffer.from(inner)));
+        return;
+      }
       const f = { op: h.op, raw: bytes };
+      // Activity frames intern strings: read them, or every later frame on
+      // this socket decodes against a dictionary that has fallen behind.
+      if (h.op === Op.Activity) {
+        const kind = r.bits(2);
+        r.bits(6);
+        if (kind === 0) { for (let i = 0; i < 12; i++) r.str(); r.uvarint(); r.bits(8); r.blob(); r.uvarint(); }
+        else if (kind === 1) { const n = r.uvarint(); for (let i = 0; i < n; i++) r.str(); r.uvarint(); }
+        else if (kind === 2) { r.str(); r.uvarint(); }
+      }
       if (h.op === Op.ConvMessage) {
         f.msg = {
           conversationId: r.str(),

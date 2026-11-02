@@ -4775,3 +4775,105 @@ Tests:
 Not built: guests, shared channels, team pictures, archiving, tabs and apps
 inside a channel, and member requests in private teams. Those are Teams'
 enterprise layer.
+
+### 6bq. The activity feed, and coalescing on the chat socket
+
+**What it is.** One list of what happened that concerns you:
+
+- somebody mentioned you;
+- somebody replied to something you wrote;
+- somebody reacted to something you wrote;
+- somebody added you to a team.
+
+It sits in the rail, above Chat, with its own unread count.
+
+**The model** (`messaging/activity.go`, migration 0067). There is one row per person per event, written when the event happens. A row names the message or the team, and holds nothing more:
+
+- the text, the conversation and its title are read through it when the feed is listed, so an edit shows the new words;
+- deleting the message, the team or the conversation deletes the row, by cascade or in the soft-delete transaction;
+- a conversation you have left drops out of your feed and out of its count. The membership check is in the one query every read goes through, the push included.
+
+The rules:
+
+- **Your own actions never notify you.** No row for mentioning yourself, replying to yourself or reacting to your own message.
+- **One event, one row.** A reply that also mentions you is a mention.
+- **Reactions toggle cleanly.** A reaction makes one row however often it is toggled, and taking it back takes the row back.
+- **Re-adding is not news.** Adding someone who is already on a team does nothing.
+- **Scheduled messages wait.** A scheduled message notifies when it is delivered, not when it is written.
+- **Reading follows the conversation.** Opening a conversation reads its mentions and replies, not its reactions, which aren't in its text.
+- **Mark read** marks the ids you name (at most 100, tested one over) or everything. Somebody else's ids do nothing.
+
+**Bounds.**
+
+- A person keeps the newest 500 rows. The trim walks the person's index past the 500th row on every insert, so it is bounded.
+- A page is at most 100 rows.
+- Pages are ordered by (time, id) with a total tiebreak. `TestActivityCapPagingAndPlans` pages through 501 rows written three to a millisecond, without a loss or a repeat.
+
+**Speed (rule 7).** Every query uses an index; EXPLAIN plans are checked in the test:
+
+- the feed and its count walk (user, time, id);
+- the cascades and the reaction take-back use partial indexes on message and on team.
+
+**The push** is a new frame, `OpActivity` 0x129, on the chat socket, in three kinds:
+
+- a new item, carrying every field the feed draws (the push-tail rule), so the client adds it without asking;
+- the ids that became read;
+- an item taken back.
+
+Each kind carries the server's unread count, so every device's badge is the source's number, not a client's arithmetic. On reconnect the client asks once for anything it missed.
+
+**The interface.** It follows Aether's own rules (one accent, hairlines, radii up to 12px), not Teams'.
+
+- **Day sections.** The feed reads in sections (Today, Yesterday, a weekday, then the date), and each section's heading sticks while its rows scroll under it.
+- **Grouped reactions.** Reactions to one message fold into one row: "Ada, Ben and 2 others reacted 👍❤️".
+- **A small drawn mark** on the avatar's corner says what kind of event it is: @, reply, heart or team.
+- **The quoted message.** The message is quoted on a 1px hairline, two lines (three on a wide screen).
+- **Unread.** An unread row is shown by weight, a teal point beside its time and a teal mark, never by a filled background.
+- **Filters** are one row that scrolls inside itself on a phone, with a fade at the edge where it runs on.
+- **New arrivals.** A row arriving while you look gets one tint that fades (none with reduced motion).
+
+Two defects were found by looking at the screenshots:
+
+- **Overlapping rows.** `.unread` is already the app-wide 20-px badge class, so unread rows inherited its height and overlapped. The row state is now `is-unread`.
+- **Startup render race.** Sign-in painted the home page after its data loaded, whatever the person had clicked in the meantime. Pressing a rail button early was undone. The startup render now draws home only if home is still chosen.
+
+The bottom bar now holds five buttons, so its buttons flex between 44 and 72 px; five fixed 72-px buttons overflowed a 360-px phone.
+
+**Measured** on a plaintext server, tshark on loopback. Loopback here is IPv4 (127.0.0.1): 4 B of loopback framing plus 20 B of IP plus 20 B of TCP is 44 B a packet. TLS would add a record header to each write too.
+
+The first capture showed each event leaving as two TCP segments, the message frame and the activity frame 0.4 ms apart. Each segment paid the packet headers again:
+
+| Event | Before: segments, wire bytes | After coalescing |
+|---|---|---|
+| B mentions A (message 126 B + activity 96 B) | 2 segments, 318 B; payload efficiency 69.8% | 1 segment, 276 B; 80.4% |
+| B reacts (activity 97 B + message 59 B) | 2 segments, 248 B; 62.9% | 1 segment, 207 B; 75.4% |
+| B takes it back (activity 5 B + message 50 B) | 2 segments, 147 B; 37.4% | 1 segment, 104 B; 52.9% |
+| A marks all read on another device (6 B) | 1 segment, 52 B; 11.5% | unchanged (alone) |
+| Idle, 4 s | 0 frames | 0 frames |
+
+Efficiency is the activity and message payload bytes over the bytes on the wire. The 6 B of batch framing count against it.
+
+The new-item frame is 96 B for a 38-character quote: the first time a socket sees an actor, conversation or title, it pays the full string; afterwards those are 1-2 B indexes.
+
+The JSON baseline is the REST read of the same item, measured: 310 B for one item with a 37-character quote (334 B with the list envelope), before HTTP headers. That is 3.2 times the 96-B frame, and the frame is the first-sight cost; repeats of the same actor and conversation are cheaper still.
+
+**Coalescing on the chat socket** (`hub.go`, `writePump`) is the general fix, and it applies to every chat push, not only activity:
+
+- the writer holds the first frame for up to 5 ms and sends whatever else arrives in that window as one `OpBatch`, the meeting socket's existing container;
+- a frame that arrives alone leaves alone, unwrapped;
+- a batch is capped at 32 frames or 32 KB.
+
+The cost is up to 5 ms of added latency on a push. The meeting socket holds 15 ms.
+
+The browser and both Node harnesses unpack batches. The messaging harness's raw client also learned to read activity frames: a client that skips a frame carrying interned strings falls behind the server's dictionary, and from then on decodes every later frame wrong. That was the cause of its 23 failures, found before the fix.
+
+**Tests.**
+
+- `activity_test.go`: mentions, replies, reactions, edits read through, deletes, reading three ways, leaving, team adds and team deletion, bounds one over, the cap, paging inside ties, index plans, and the three push frames off a real socket.
+- `compose_test.go`: a scheduled mention appears only once delivered.
+- `hub_test.go`, `TestWriterCoalesces`: spaced frames batch in order, a lone frame is unwrapped, and closing while holding one ends cleanly.
+- Mutations: 18 on activity and 2 on the writer, each caught. Two writer mutants survive and are equivalent: wrapping a lone frame (`EncodeBatch` already unwraps one), and dropping the cancel case inside the window (the 5 ms timer still ends it).
+- `tools/e2e/activity.e2e.mjs`, three browsers: push arrival and badge, grouped reactions and take-back, replies, filters, opening at the message, reading by opening, mark all read, and the anonymous, CSRF, 101-id, unknown-kind and somebody-else's-id cases. It fails when the client ignores new-item frames.
+- Layout harness: the feed and an opened item at every width.
+
+**Not built:** missed calls, meeting starts, file shares and "trending" in the feed, and per-kind notification settings.
