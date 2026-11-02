@@ -22,10 +22,33 @@ mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const PEOPLE = {
-  maya: { name: 'Maya Chen', email: 'maya.chen@northwind.example' },
-  arjun: { name: 'Arjun Rao', email: 'arjun.rao@northwind.example' },
-  sofia: { name: 'Sofia Lind', email: 'sofia.lind@northwind.example' },
+  maya: { name: 'Maya Chen', email: 'maya.chen@northwind.example', look: ['#e8b896', '#2b1d16', '#1f2d33'] },
+  arjun: { name: 'Arjun Rao', email: 'arjun.rao@northwind.example', look: ['#b98563', '#1a1410', '#2b2e4a'] },
+  sofia: { name: 'Sofia Lind', email: 'sofia.lind@northwind.example', look: ['#e9bfa0', '#3b2a20', '#2a2f3a'] },
 };
+
+// Each person's camera: a drawn head and shoulders in their own colours, on a
+// plain wall -- the figure the segmenter takes for a person (effects.e2e.mjs).
+const cameraFor = ([skin, hair, shirt]) => `(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async (c) => {
+    if (!c || !c.video) return real(c);
+    const cv = document.createElement('canvas');
+    cv.width = 640; cv.height = 360;
+    const g = cv.getContext('2d');
+    const draw = () => {
+      g.fillStyle = '#c9d6df'; g.fillRect(0, 0, 640, 360);
+      g.fillStyle = '${shirt}'; g.beginPath(); g.ellipse(320, 230, 135, 75, 0, Math.PI, 0); g.fill(); g.fillRect(185, 230, 270, 130);
+      g.fillStyle = '${skin}'; g.fillRect(298, 150, 44, 40);
+      g.beginPath(); g.ellipse(320, 115, 48, 60, 0, 0, 2 * Math.PI); g.fill();
+      g.fillStyle = '${hair}'; g.beginPath(); g.ellipse(320, 78, 52, 32, 0, Math.PI, 0); g.fill();
+    };
+    draw(); setInterval(draw, 100);
+    const s = cv.captureStream(30);
+    if (c.audio) (await real({ audio: c.audio })).getAudioTracks().forEach((t) => s.addTrack(t));
+    return s;
+  };
+})();`;
 const PASSWORD = 'Showcase-' + Math.random().toString(36).slice(2, 10) + '!';
 
 const FAKE_SPEECH = `(() => {
@@ -51,6 +74,7 @@ async function open(who, viewport = { width: 1440, height: 900, deviceScaleFacto
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.evaluateOnNewDocument(FAKE_SPEECH);
+  await page.evaluateOnNewDocument(cameraFor(PEOPLE[who].look));
   await page.evaluateOnNewDocument(() => { try { localStorage.setItem('aether.theme', 'dark'); } catch {} });
   await page.setViewport(viewport);
   await page.goto(BASE + '/', { waitUntil: 'networkidle2' });
@@ -191,6 +215,23 @@ await arjun.evaluate(() => window.__say('Next, the pricing page. I think we can 
 const seen = await sofia.waitForFunction(() => document.getElementById('caption')?.textContent.includes('pricing page'), { timeout: 8000 }).then(() => true, () => false);
 if (!seen) console.log('captions not shown:', await sofia.evaluate(() => ({ bar: document.getElementById('caption')?.outerHTML.slice(0, 200), fx: document.documentElement.dataset })), await arjun.evaluate(() => window.__speech.map((r) => r.running)));
 await shot(sofia, 'captions');
+
+// --- Together mode: cameras on, everyone in one scene ------------------------------
+await sofia.evaluate(() => document.getElementById('btn-cc').click()); // captions off again
+for (const p of [maya, arjun, sofia]) await p.evaluate(() => { document.getElementById('btn-cam').click(); document.getElementById('side-close')?.click(); document.querySelector('#rec-banner [data-close]')?.click(); });
+await sleep(3000);
+await maya.evaluate(() => { document.getElementById('btn-view').click(); document.getElementById('view-together').click(); });
+await maya.waitForFunction(() => !!document.querySelector('#dialog select[name="scene"]'), { timeout: 8000 });
+await maya.evaluate(() => document.querySelector('#dialog [data-yes]').click());
+await maya.waitForFunction(() => Number(document.documentElement.dataset.togOutlines || 0) >= 2, { timeout: 30000 }).catch(() => console.log('together: outlines did not all arrive'));
+await sleep(3500);
+await shot(maya, 'together');
+await maya.evaluate(() => { document.getElementById('btn-view').click(); document.getElementById('view-together').click(); });
+await maya.waitForFunction(() => !!document.querySelector('#dialog input[name="stop"]'), { timeout: 8000 });
+await maya.evaluate(() => { document.querySelector('#dialog input[name="stop"]').checked = true; document.querySelector('#dialog [data-yes]').click(); });
+await sleep(800);
+for (const p of [maya, arjun, sofia]) await p.evaluate(() => document.getElementById('btn-cam').click());
+await sleep(800);
 
 // --- On a phone ---------------------------------------------------------------------
 const phone = { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true };

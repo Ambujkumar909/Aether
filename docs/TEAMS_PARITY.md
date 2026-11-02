@@ -132,6 +132,7 @@ ecosystem.
 | Webinars, town halls, registration | Not built | Events tier |
 | Audio conferencing / PSTN / voicemail / call queues | N/A | Telephony carrier integration |
 | Custom backgrounds, video effects | Built | Camera > Video effects and pre-join "Background filters": None, Standard blur, Portrait blur, backgrounds, Add new (kept on the device, never uploaded), Soft focus, Adjust brightness, Mirror my video; segmentation on the device (MediaPipe); a background asked to be hidden is never sent unblurred; §6bk. Animated backgrounds, avatars: not built |
+| Together mode | Built | View > Together mode; organizer applies it for everyone and picks a scene (Auditorium, Café, Conference room); everyone cut out by their own 64x36 outline (sent only when it changes) and seated in one scene; §6bo. Spatial audio, "only for you": not built |
 | Meeting themes | Not built | |
 | Live streaming (RTMP/SRT/NDI), eCDN | Not built | |
 

@@ -60,7 +60,8 @@ import {
   visibleLines,
 } from './captions.js';
 import { directory, messaging, qna, notes, transcript as transcriptApi } from './api.js';
-import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, loadSettings as loadFx, saveSettings as saveFx, normalize as normalizeFx, needsPipeline as fxNeedsPipeline, listImages as fxListImages, addImage as fxAddImage, removeImage as fxRemoveImage } from './effects.js';
+import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, loadSettings as loadFx, saveSettings as saveFx, normalize as normalizeFx, needsPipeline as fxNeedsPipeline, listImages as fxListImages, addImage as fxAddImage, removeImage as fxRemoveImage, loadSegmenter } from './effects.js';
+import { quantize as togQuantize, encodeMask as togEncode, MASK_W as TOG_W, MASK_H as TOG_H, MAX_MASK_BYTES as TOG_MAX, encodeSet as encodeTogSet, encodeOutline as encodeTogOutline, decodeTogether, seats as togSeats, SCENES as TOG_SCENES } from './together.js';
 import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as recBanner, elapsed as recElapsed, pickMime, ChunkSink, fileName as recFileName, WHAT as REC } from './recording.js';
 import { WSMediaSender, WSMediaReceiver, wsMediaSupported } from './wsmedia.js';
 import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence } from './chat.js';
@@ -292,6 +293,11 @@ const state = {
   fxPipe: null,
   fxStatus: 'none',
   fxImages: new Map(),
+  // Together mode (together.js): the room's state, each person's latest
+  // outline, and this machine's own.
+  together: { on: false, scene: 0, by: '' },
+  outlines: new Map(),
+  myOutline: null,
   rec: { recording: false, transcribing: false, captions: false, recBy: '', recSince: 0, trBy: '', trSince: 0 },
   session: 0,
   speechConsent: null,
@@ -527,6 +533,7 @@ function handle(h, r) {
         // for the life of the meeting.
         syncAudioSinks();
       } else if (!state.people.has(e.id)) {
+        togSent = null; // an arrival has nobody's outline yet
         state.people.set(e.id, {
           id: e.id,
           name: e.name,
@@ -794,6 +801,16 @@ function handle(h, r) {
       const who = r.str();
       const body = new TextDecoder().decode(r.blob());
       addChat(who, body);
+      break;
+    }
+    case Op.Together: {
+      const m = decodeTogether(r);
+      if (m?.kind === 'state') onTogetherState(m);
+      else if (m?.kind === 'mask') {
+        state.outlines.set(m.from, m.bits);
+        // How many arrived, for the live checks (a still person sends few).
+        document.documentElement.dataset.togOutlines = String(Number(document.documentElement.dataset.togOutlines || 0) + 1);
+      }
       break;
     }
     case Op.Recording: {
@@ -2859,6 +2876,258 @@ function openEffectsSheet() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Together mode (together.js)
+//
+// The organizer applies it for everyone. Each client then sends the outline
+// of the person in its own picture -- only when it changes, at most ten times
+// a second -- and draws everyone, cut out by their outlines, in one scene.
+// ---------------------------------------------------------------------------
+
+let togTimer = null;
+let togRaf = 0;
+let togSent = null; // the last outline sent, as its bytes' string
+let togSeg = null; // { video, seg } when segmenting the raw camera ourselves
+const togVideos = new Map(); // stream id -> hidden <video>, for drawing
+
+function onTogetherState(m) {
+  const was = state.together.on;
+  state.together = { on: m.on, scene: m.scene, by: m.by };
+  if (m.on && !was) toast(`${m.by || 'The organizer'} selected together mode for everyone`);
+  if (!m.on && was) toast('Together mode has stopped');
+  syncTogether();
+}
+
+function syncTogether() {
+  const on = state.together.on;
+  const cv = $('together');
+  if (cv) cv.hidden = !on;
+  if (on && !togTimer) {
+    togSent = null;
+    togTimer = setInterval(sendOutline, 100);
+  } else if (!on && togTimer) {
+    clearInterval(togTimer);
+    togTimer = null;
+    state.outlines.clear();
+    state.myOutline = null;
+    if (togSeg) {
+      togSeg.video.remove();
+      togSeg = null;
+    }
+  }
+  if (on && !togRaf) togRaf = requestAnimationFrame(drawTogether);
+  syncViewMenu();
+}
+
+// The outline of the person in this machine's picture: from the effects
+// pipeline's mask when one is running, else from a segmentation of the
+// camera made here, for this.
+async function myConfidence() {
+  const pipe = state.fxPipe;
+  if (pipe?.mask && pipe.maskCanvas?.width) return { conf: pipe.mask, w: pipe.maskCanvas.width, h: pipe.maskCanvas.height };
+  const cam = state.localStream?.getVideoTracks()[0];
+  if (!cam || cam.readyState !== 'live' || !state.cam) return null;
+  if (!togSeg) {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    Object.assign(video.style, { position: 'fixed', left: '-10000px', width: '2px', height: '2px', opacity: '0' });
+    document.body.appendChild(video);
+    togSeg = { video, seg: null, track: null };
+    loadSegmenter().then((s) => togSeg && (togSeg.seg = s), () => {});
+  }
+  if (togSeg.track !== cam) {
+    togSeg.track = cam;
+    togSeg.video.srcObject = new MediaStream([cam]);
+    togSeg.video.play().catch(() => {});
+  }
+  const v = togSeg.video;
+  if (!togSeg.seg || v.readyState < 2) return null;
+  const res = togSeg.seg.segmentForVideo(v, performance.now());
+  const m = res.confidenceMasks?.[0];
+  const out = m ? { conf: m.getAsFloat32Array(), w: m.width, h: m.height } : null;
+  res.close?.();
+  return out;
+}
+
+let togBusy = false;
+async function sendOutline() {
+  if (togBusy || !state.together.on) return;
+  togBusy = true;
+  try {
+    const c = state.cam ? await myConfidence() : null;
+    if (!c) {
+      state.myOutline = null;
+      return;
+    }
+    const bits = togQuantize(c.conf, c.w, c.h, state.myOutline);
+    state.myOutline = bits;
+    const rle = togEncode(bits);
+    const key = rle.join(',');
+    // Nothing changed, nothing sent: a person sitting still costs nothing.
+    if (key === togSent || rle.length > TOG_MAX) return;
+    togSent = key;
+    send((w) => encodeTogOutline(w, rle));
+  } finally {
+    togBusy = false;
+  }
+}
+
+// The scene, flat, in the app's neutrals: a wall, and in front of each row a
+// desk the people sit behind.
+const TOG_LOOK = [
+  { wall: '#1b2330', floor: '#141a22', tier: '#202a37', desk: '#2b3440', edge: '#3a4654' }, // auditorium
+  { wall: '#2e2822', floor: '#211c18', tier: '#2a231d', desk: '#4a3b2e', edge: '#5c4a3a' }, // café
+  { wall: '#1d2a30', floor: '#151e22', tier: '#1a252b', desk: '#33444c', edge: '#41565f' }, // conference room
+];
+
+function togVideoFor(stream) {
+  if (!stream) return null;
+  let v = togVideos.get(stream.id);
+  if (!v) {
+    v = document.createElement('video');
+    v.muted = true;
+    v.playsInline = true;
+    v.autoplay = true;
+    Object.assign(v.style, { position: 'fixed', left: '-10000px', width: '2px', height: '2px', opacity: '0' });
+    v.srcObject = stream;
+    document.body.appendChild(v);
+    v.play().catch(() => {});
+    togVideos.set(stream.id, v);
+  }
+  return v;
+}
+
+const togMask = Object.assign(document.createElement('canvas'), { width: TOG_W, height: TOG_H });
+const togMaskCtx = togMask.getContext('2d');
+const togMaskData = togMaskCtx.createImageData(TOG_W, TOG_H);
+const togPerson = document.createElement('canvas');
+
+function drawTogether() {
+  togRaf = 0;
+  if (!state.together.on) {
+    for (const v of togVideos.values()) v.remove();
+    togVideos.clear();
+    return;
+  }
+  togRaf = requestAnimationFrame(drawTogether);
+  const cv = $('together');
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const W = Math.max(1, Math.round(r.width * dpr)), H = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== W || cv.height !== H) {
+    cv.width = W;
+    cv.height = H;
+  }
+  const g = cv.getContext('2d');
+  const look = TOG_LOOK[state.together.scene] ?? TOG_LOOK[0];
+  g.fillStyle = look.floor;
+  g.fillRect(0, 0, W, H);
+  // The scene at 16:9, centred.
+  const sw = Math.min(W, (H * 16) / 9), sh = (sw * 9) / 16, ox = (W - sw) / 2, oy = (H - sh) / 2;
+  g.fillStyle = look.wall;
+  g.fillRect(ox, oy, sw, sh * 0.7);
+  const people = participants().filter((p) => !p.presentation);
+  const st = togSeats(state.together.scene, people.length);
+  const rows = new Map();
+  people.forEach((p, i) => {
+    const s = st[i];
+    if (!rows.has(s.row)) rows.set(s.row, []);
+    rows.get(s.row).push({ p, s });
+  });
+  // Back rows first, so the front ones sit in front of them. Each row stands
+  // on its own tier, a little lighter than the wall: the room's depth.
+  for (const row of [...rows.keys()].sort((a, b) => b - a)) {
+    const list = rows.get(row);
+    {
+      const s0 = list[0].s;
+      const ty = oy + (s0.y + s0.h * 0.9) * sh;
+      g.fillStyle = look.tier;
+      g.fillRect(ox, ty, sw, Math.max(4, s0.h * sh * 0.5));
+    }
+    for (const { p, s } of list) {
+      const x = ox + s.x * sw, y = oy + s.y * sh, w = s.w * sw, h = s.h * sh;
+      const video = p.stream && liveVideo(p) ? togVideoFor(p.stream) : null;
+      const bits = p.self ? state.myOutline : state.outlines.get(p.id);
+      if (video && video.readyState >= 2 && video.videoWidth) {
+        const pw = Math.round(w), ph = Math.round((w * 9) / 16);
+        if (togPerson.width !== pw || togPerson.height !== ph) {
+          togPerson.width = pw;
+          togPerson.height = ph;
+        }
+        const pc = togPerson.getContext('2d');
+        pc.globalCompositeOperation = 'copy';
+        pc.drawImage(video, 0, 0, pw, ph);
+        if (bits) {
+          const d = togMaskData.data;
+          for (let i = 0, j = 3; i < bits.length; i++, j += 4) d[j] = bits[i] ? 255 : 0;
+          togMaskCtx.putImageData(togMaskData, 0, 0);
+          pc.globalCompositeOperation = 'destination-in';
+          pc.imageSmoothingEnabled = true;
+          pc.filter = `blur(${Math.max(1, pw / 160)}px)`;
+          pc.drawImage(togMask, 0, 0, pw, ph);
+          pc.filter = 'none';
+          g.drawImage(togPerson, x, y + h - ph);
+        } else {
+          // No outline yet: the picture in a rounded frame.
+          g.save();
+          g.beginPath();
+          g.roundRect(x, y + h - ph, pw, ph, Math.min(12, pw / 12));
+          g.clip();
+          g.drawImage(togPerson, x, y + h - ph);
+          g.restore();
+        }
+      } else {
+        const rad = Math.min(w, h) * 0.24;
+        g.fillStyle = '#244a46';
+        g.beginPath();
+        g.arc(x + w / 2, y + h - rad * 1.6, rad, 0, Math.PI * 2);
+        g.fill();
+        g.fillStyle = '#9fd8cf';
+        g.font = `600 ${Math.round(rad * 0.8)}px system-ui, sans-serif`;
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText(initials(faceOf(p)), x + w / 2, y + h - rad * 1.6);
+      }
+    }
+    // The desk this row sits behind, and the names on it.
+    const first = list[0].s, last = list[list.length - 1].s;
+    const dx = ox + (first.x - first.w * 0.06) * sw, dw = (last.x + last.w * 1.06 - first.x + first.w * 0.06) * sw;
+    const dy = oy + (first.y + first.h * 0.86) * sh, dh = Math.max(6, first.h * sh * 0.16);
+    g.fillStyle = look.desk;
+    g.beginPath();
+    g.roundRect(dx, dy, dw, dh, Math.min(10, dh / 2));
+    g.fill();
+    g.fillStyle = look.edge;
+    g.fillRect(dx, dy, dw, Math.max(2, dh * 0.12));
+    g.fillStyle = '#e7ecef';
+    g.font = `500 ${Math.max(10, Math.round(dh * 0.42))}px system-ui, sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    for (const { p, s } of list) g.fillText(p.self ? 'You' : p.name, ox + (s.x + s.w / 2) * sw, dy + dh * 0.58, s.w * sw);
+  }
+}
+
+// View > Together mode. The organizer chooses it, and the scene, for everyone.
+async function openTogether() {
+  const mayApply = state.isHost;
+  if (!mayApply) {
+    toast(state.together.on ? 'Only the organizer can change the scene when Together Mode is selected for everyone.' : 'Only the organizer can choose Together mode for everyone.');
+    return;
+  }
+  const on = state.together.on;
+  const v = await formDialog(
+    on ? 'Change scene' : 'Together mode',
+    `<p class="mo-note">Everyone in the meeting will see each other in one scene. The scene will change for everyone.</p>
+     <div class="mo-row"><span>Scene</span><select class="input" name="scene">${TOG_SCENES.map((s) => `<option value="${s.id}"${s.id === state.together.scene ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>
+     ${on ? '<label class="mo-row"><span>Stop Together mode for everyone</span><input type="checkbox" name="stop"></label>' : ''}`,
+    on ? 'Apply' : 'Start for everyone'
+  );
+  if (!v) return;
+  const stop = v.stop === 'on' || v.stop === true;
+  send((w) => encodeTogSet(w, !stop, stop ? 0 : Number(v.scene) || 0));
+}
+
 // The transcript panel: the session's lines, live while it is transcribed.
 const transcriptState = { lines: [], loaded: false, loading: false, error: '' };
 
@@ -3674,6 +3943,7 @@ function wireMenu(btnId, popId, onOpen) {
 
 function wireMeetingMenus() {
   wireMenu('btn-view', 'view-pop', syncViewMenu);
+  $('view-together').onclick = () => openTogether();
   document.querySelectorAll('#view-pop [data-layout]').forEach((b) => {
     b.onclick = () => {
       if (b.disabled) return;
@@ -3757,6 +4027,7 @@ function syncViewMenu() {
     b.setAttribute('aria-checked', String(state.layout === l));
   }
   $('view-bubbles').setAttribute('aria-checked', String(!state.bubbles));
+  $('view-together')?.setAttribute('aria-checked', String(state.together.on));
   $('view-full').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
 }
 

@@ -381,6 +381,30 @@ const SCREENS = [
     },
   },
   {
+    // View > Together mode: the organizer's scene picker, then the scene.
+    name: 'together-dialog',
+    go: async (page) => {
+      await page.evaluate(() => { document.getElementById('btn-view')?.click(); document.getElementById('view-together')?.click(); });
+      await sleep(600);
+    },
+  },
+  {
+    name: 'together',
+    go: async (page) => {
+      await page.evaluate(() => document.querySelector('#dialog [data-yes]')?.click());
+      await sleep(2500);
+    },
+  },
+  {
+    name: 'together-off',
+    go: async (page) => {
+      await page.evaluate(() => { document.getElementById('btn-view')?.click(); document.getElementById('view-together')?.click(); });
+      await sleep(600);
+      await page.evaluate(() => { const c = document.querySelector('#dialog input[name="stop"]'); if (c) c.checked = true; document.querySelector('#dialog [data-yes]')?.click(); });
+      await sleep(800);
+    },
+  },
+  {
     // Camera > Video effects: the panel, with Standard blur on.
     name: 'effects',
     go: async (page) => {

@@ -115,10 +115,14 @@ ARCHITECTURE §6bk; `web/src/effects.js` (+ `effects.test.mjs`), `web/vendor/med
 
 ARCHITECTURE §6bl; VP9 at quantizer 32 (camera) / 24 (screen) in `wsmedia.js` (`pickVideoConfig`), codec on spare flag bit 1 (`wire.js`), receivers switch decoder at a key frame. `tools/e2e/codec-study.mjs` is the study. The §6bk wire finding was corrected (A's port, not B's).
 
+## Batch 15 — done: effects measured properly; Together mode
+
+ARCHITECTURE §6bn (a WebGL compositor built, measured as no gain, removed; §6bk's cost table corrected; `tools/e2e/measure-fx-cost.mjs`) and §6bo (Together mode: `OpTogether` 0x128, `room/together.go`, `signal/together.go`, `web/src/together.js`, scene in `app.js`, `tools/e2e/together.e2e.mjs`). The effects and Together harnesses use a drawn head-and-shoulders camera the segmenter recognises.
+
 ## Next, in order
 
-1. A WebGL/worker effects compositor (the GPU read-back is most of a segmentation, §6bk); measure the camera quantizer on real footage (§6bl).
-2. Together mode.
+1. Beyond meetings: teams as containers above channels, an activity feed, calendar views with a scheduling assistant.
+2. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
 2. Beyond meetings: teams as containers above channels, activity feed, calendar views + scheduling assistant, remaining chat items (see TEAMS_PARITY "Not built" rows).
 
 ## How to run things

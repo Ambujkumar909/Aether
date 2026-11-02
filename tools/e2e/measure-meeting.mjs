@@ -17,6 +17,7 @@ import { Writer, Reader, Op, newDictPair, splitBatch, encodeState, decodeState }
 import { decodeBreakout, encodeSet, encodeCmd, encodeAnnounce, K } from '../../web/src/breakout.js';
 import { decodeWhiteboard, encodeOpen, encodeStroke, encodeSimple, encodeNote, W } from '../../web/src/whiteboard.js';
 import { decodeRecording, encodeSet as encodeRecSet, encodeCaption, WHAT as REC } from '../../web/src/recording.js';
+import { quantize, encodeMask, encodeSet as encodeTogSet, encodeOutline, decodeTogether } from '../../web/src/together.js';
 
 const HOST = '127.0.0.1', PORT = 8444, BASE = `http://${HOST}:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -37,7 +38,7 @@ async function signup(label) {
 function join(cookie, room, name, ticket = '') {
   return new Promise((resolve, reject) => {
     const dicts = newDictPair();
-    const p = { id: '', ops: [], dicts, br: [], wb: [], rec: [] };
+    const p = { id: '', ops: [], dicts, br: [], wb: [], rec: [], tog: [] };
     let buf = Buffer.alloc(0), up = false;
     const sock = connect({ host: HOST, port: PORT }, () => sock.write(
       `GET /rtc?room=${encodeURIComponent(room)}&name=${name}${ticket ? `&bt=${encodeURIComponent(ticket)}` : ''} HTTP/1.1\r\nHost: ${HOST}:${PORT}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
@@ -75,6 +76,7 @@ function join(cookie, room, name, ticket = '') {
           if (h.op === Op.SetRole) r.str();
           if (h.op === Op.Whiteboard) p.wb.push(decodeWhiteboard(r));
           if (h.op === Op.Recording) p.rec.push(decodeRecording(r));
+          if (h.op === Op.Together) p.tog.push(decodeTogether(r));
         };
         each(new Reader(payload, dicts.rx));
       }
@@ -227,6 +229,21 @@ for (let i = 1; i <= 8; i++) {
 A.send((w) => encodeCaption(w, true, 1, sentence));
 await sleep(1500);
 console.log(`  recording frames seen: A ${A.rec.map((x) => x?.kind).join(',')}; B ${B.rec.map((x) => x?.kind + (x?.final ? '(final)' : '')).join(',')}`);
+// Together mode: A applies it; B sends the outline of a head and shoulders
+// (256 x 256 confidences, as the segmenter gives them, quantized to 64 x 36).
+console.log(`tog-on         ${at()}  (A applies Together mode, Café, for everyone)`);
+A.send((w) => encodeTogSet(w, true, 1));
+await sleep(1500);
+const conf = new Float32Array(256 * 256);
+for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) conf[y * 256 + x] = (((x - 128) / 40) ** 2 + ((y - 80) / 50) ** 2 < 1) || (y > 140 && x > 50 && x < 206) ? 0.95 : 0.03;
+const rle = encodeMask(quantize(conf, 256, 256));
+console.log(`tog-outline    ${at()}  (B sends its outline: ${rle.length} B of run lengths)`);
+B.send((w) => encodeOutline(w, rle));
+await sleep(1500);
+console.log(`tog-off        ${at()}  (A turns it off)`);
+A.send((w) => encodeTogSet(w, false, 0));
+await sleep(1500);
+console.log(`  together frames seen: A ${A.tog.map((x) => x?.kind).join(',')}; B ${B.tog.map((x) => x?.kind).join(',')}`);
 console.log(`end-meeting    ${at()}`);
 A.send((w) => w.header(Op.EndMeeting));
 await sleep(1500);

@@ -7391,3 +7391,7 @@ h2 .who-link { font: inherit; }
   .mb-leave > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .mb-leave { padding: 0 14px; min-width: 52px; justify-content: center; }
 }
+
+/* Together mode: the scene over the stage, under the banners and captions. */
+.together { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 6; display: block; border-radius: var(--r-md); }
+.together[hidden] { display: none; }

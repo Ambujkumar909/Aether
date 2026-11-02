@@ -16,8 +16,8 @@ one Go server and one browser client, measured down to the byte.
 
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![No build step](https://img.shields.io/badge/client-no_build_step-0b7a62?style=flat-square)
-![Go tests](https://img.shields.io/badge/Go_tests-494-0b7a62?style=flat-square)
-![Browser harnesses](https://img.shields.io/badge/browser_harnesses-22-0b7a62?style=flat-square)
+![Go tests](https://img.shields.io/badge/Go_tests-495-0b7a62?style=flat-square)
+![Browser harnesses](https://img.shields.io/badge/browser_harnesses-23-0b7a62?style=flat-square)
 ![Measured](https://img.shields.io/badge/every_claim-measured_with_tshark-2b3440?style=flat-square)
 
 [**Features**](#everything-a-team-needs-to-meet) · [**Why it is different**](#the-difference-is-measured) · [**Privacy**](#private-by-construction) · [**Architecture**](#architecture) · [**Run it**](#run-it-in-two-minutes) · [**Engineering**](#how-it-is-built)
@@ -105,6 +105,12 @@ notes with agenda and follow-up tasks. Moderated Q&A. An attendance list you can
 </tr>
 </table>
 
+<img src="docs/media/together.png" alt="Together mode: three people cut out of their rooms and seated in one auditorium" width="100%" />
+
+**Together mode.** Everyone is cut out of their own room and seated in one scene. Each person
+sends only the *outline* of themselves, 63 bytes, and only when it changes, so nobody's computer
+has to cut out anybody else. A person sitting still costs nothing at all.
+
 <div align="center">
 <img src="docs/media/phone-chat.png" alt="Chat on a phone" width="30%" />
 &nbsp;&nbsp;
@@ -124,7 +130,7 @@ notes with agenda and follow-up tasks. Moderated Q&A. An attendance list you can
 | --- | --- |
 | **Meetings** | Video and audio meetings, 1:1 and group calls with ringing · pre-join camera and microphone check · lobby and admission · invite links · screen sharing · gallery, speaker, large gallery and focus-on-content views · spotlight · raised hands, lower all · reactions · mute all · disable an attendee's mic or camera · remove · end for everyone · roles and meeting options · breakout rooms (assign, shuffle, timers, announcements, return) · whiteboard · Q&A with moderation · meeting notes · call health · pop-out |
 | **Recording and speech** | Recording made on your own computer · live transcription, attributed per speaker · live captions for everyone · `.vtt` and `.txt` downloads · consent asked before anyone's speech becomes text · a deployment-wide "recording allowed" switch · every start and stop in the audit log |
-| **Video** | Background blur, portrait blur, backgrounds, your own images (kept on your device) · soft focus · low-light correction · mirror my video · VP9 at constant quality where the browser can |
+| **Video** | Background blur, portrait blur, backgrounds, your own images (kept on your device) · soft focus · low-light correction · mirror my video · Together mode (auditorium, café, conference room) · VP9 at constant quality where the browser can |
 | **Audio** | Neural noise suppression (RNNoise) · echo cancellation required, with a warning when a device cannot · instant unmute · same-room echo warning |
 | **Chat** | 1:1, groups and notes to self · channels (public and private) with threaded posts · formatting · reactions · replies · edit with history · delete and undo send · forward · mentions · read receipts · typing · presence and status, with automatic "in a call" and "away" · pins, saved messages · priority · scheduled send · polls, praise and announcements · files, photos, video clips and voice messages · search · filters · block |
 | **Calendar** | Scheduling with categories and invitations · co-organizers · availability · attendance history · "5 minutes left" notice |
@@ -150,6 +156,7 @@ this repository. Each one is written up, with its method, in
 <tr><td>A camera that is <i>not moving</i> (socket path)</td><td align="right">579 kbit/s at a VP8 target</td><td align="right"><b>49–81 kbit/s</b></td><td>VP9 at constant quality, sharper (+5 dB)</td></tr>
 <tr><td>A camera with its background blurred</td><td align="right">376 kbit/s unblurred</td><td align="right"><b>88 kbit/s</b></td><td>blurred detail is not sent</td></tr>
 <tr><td>A 200-point whiteboard stroke</td><td align="right">2,421 B as JSON</td><td align="right"><b>409 B</b></td><td>2 bytes a point</td></tr>
+<tr><td>A person's outline in Together mode</td><td align="right">~440 B as JSON</td><td align="right"><b>63 B</b></td><td>and nothing while they sit still</td></tr>
 <tr><td>A spoken sentence, as live captions</td><td align="right">945 B as JSON</td><td align="right"><b>289 B</b></td><td>3.3× smaller</td></tr>
 <tr><td>Searching 50,000 people per keystroke</td><td align="right">28 ms with <code>LIKE</code></td><td align="right"><b>0.5 ms</b></td><td>index-backed, with a scale test</td></tr>
 <tr><td>A meeting where nobody is doing anything</td><td align="right">keep-alives and polls</td><td align="right"><b>nothing</b></td><td>idle costs zero</td></tr>
@@ -270,7 +277,7 @@ administrator's email and a one-time password. Sign in, then create accounts or 
 
 ```bash
 # The checks this project holds itself to
-cd engine && go test -race ./...              # 494 tests, under the race detector
+cd engine && go test -race ./...              # 495 tests, under the race detector
 cd ../web && npm test                         # client unit tests
 node ../tools/e2e/layout.e2e.mjs https://localhost:8443   # every screen at phone, tablet and desktop
 go run ./cmd/bitbudget -n 4 -minutes 15       # where every byte of a meeting goes
@@ -305,9 +312,8 @@ with the numbers in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Where it is going
 
-- **A GPU compositor for video effects.** Segmentation is measured and the next step is
-  identified: most of its cost is reading the mask back from the GPU.
-- **Together mode**, with spatial audio.
+- **Spatial audio** for Together mode, and segmentation in a worker so effects cost the page
+  nothing. (A GPU compositor was built, measured as no faster, and removed.)
 - **Teams as containers above channels**, an activity feed, and calendar views with a
   scheduling assistant.
 - **Server-side recording** linked from the meeting chat, and a Word transcript.

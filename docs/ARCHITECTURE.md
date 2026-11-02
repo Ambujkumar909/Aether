@@ -4604,3 +4604,85 @@ without. §6bk is corrected.
   a new `data-fx-fps` are updated once a second instead of every 60 frames.
   At 4 fps, 60 frames never came within a test, and the markers read
   "undefined" without saying why.
+
+### 6bo. Together mode: outlines, not cut-outs, on the wire
+
+Teams' words: "Together mode", "Change scene", "Start sharing Together Mode
+for everyone", "Only the organizer can change the scene when Together Mode
+is selected for everyone", "{{displayName}} selected together mode for
+everyone", "Together mode has stopped". Teams cuts each person out of their
+own room and seats everyone in one scene.
+
+**The design.** Cutting people out at the receiver would mean every client
+segmenting every other person's video: eight people is eight segmentations
+a frame, on every machine. Sending cut-out video would mean sending it twice
+(the cut-out for the scene and the plain one for everyone else), or a green
+background that viewers outside Together mode would see. Instead:
+
+- Each person's client sends the **outline** of the person in its own
+  picture. It is a 64 x 36 grid, run-length coded: 63 B for a head and
+  shoulders.
+- Receivers cut each video they already have with its sender's outline and
+  seat it in the scene. Nobody segments anyone else's video, and the video
+  itself is unchanged.
+- An outline is sent **only when it changes**, at most ten a second. A cell
+  joins the person above 0.6 confidence and leaves below 0.4 (hysteresis),
+  so the segmenter's wobble at an edge sends nothing. A person sitting
+  still sends **no outlines at all**: 0 in 5 s in the harness.
+- If the effects pipeline is already segmenting (blur, backgrounds), its
+  mask is reused; otherwise the outline comes from a segmentation of the
+  camera made for it.
+- An arrival is sent everyone's outline on everyone's next tick, because a
+  roster arrival marks the last outline as unsent.
+
+**The server** (`room/together.go`, `signal/together.go`, `OpTogether`
+0x128):
+
+- An organizer or co-organizer applies it for everyone, with a scene;
+  anyone else is refused, and told so in Teams' words.
+- Outlines are relayed to everyone else, only while it is on, at most
+  1,024 B each and 12 a second per person, each tested one past the limit.
+- Self-contained: a lost outline costs one tenth of a second of edge.
+
+**The scene** (`web/src/together.js` `seats`, `drawTogether` in `app.js`):
+an auditorium, a café, or a conference room, drawn flat in the app's
+neutrals. The rows are tiered and the front rows larger. Each row sits
+behind a desk with the names on it. A camera that is off is shown as an
+avatar in the seat; a picture whose outline has not arrived yet is shown in
+a rounded frame.
+
+**Measured** (tshark, loopback IPv4, plaintext server, raw sockets;
+`tools/e2e/measure-meeting.mjs`):
+
+| Event | Payload | On the wire |
+| --- | ---: | ---: |
+| Apply it for everyone: request / push to each | 4 / 5 B | 54 / 51 B |
+| One head-and-shoulders outline: from B / relayed to A | 67 / 68 B | 117 / 114 B |
+| Turn it off: request / push | 4 / 3 B | 54 / 49 B |
+
+The same outline as JSON with a base64 bitmap would be about 440 B, six
+and a half times more. At the worst case, someone moving all the time sends
+ten a second: about 9 kbit/s with the headers, a fraction of the video it
+outlines.
+
+Tests:
+
+- `web/src/together.test.mjs`: the codec round trip (about 100 B for a
+  person), anything not exactly one mask refused, hysteresis, the frames,
+  and seats on stage and not overlapping, with the front row largest.
+- `signal/together_test.go`: who may apply it, unknown scenes, a repeated
+  apply, relaying only while on and not to the sender, the size bound one
+  over, flooding, and nothing after it is off. 8 mutations, each caught.
+- `tools/e2e/together.e2e.mjs`: three browsers with drawn-person cameras,
+  read on the scene's pixels. A's face is in B's scene and A's wall is not;
+  a still person sends nothing; the late arrival gets the outlines; turning
+  it off works for everyone. It fails with the cut-out removed (no face,
+  10,310 wall samples) and with the "only when it changes" check removed
+  (50 outlines in 5 s).
+- Layout harness: the scene picker and the scene at every width.
+
+**Known limits.** The outline is 64 x 36, so the edge is soft by design.
+Outline and video travel separately and can be a frame apart while someone
+moves. There is no spatial audio yet, which Teams pairs with this view.
+Only the organizer's "for everyone" mode exists; Teams' "only for you"
+would need outlines from people who have not chosen it.

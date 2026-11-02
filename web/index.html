@@ -356,6 +356,7 @@
                 <button role="menuitemradio" data-layout="speaker">Speaker</button>
                 <button role="menuitemradio" data-layout="large">Large gallery<small>View up to 49 videos at once</small></button>
                 <button role="menuitemradio" data-layout="focus">Focus on content</button>
+                <button role="menuitemradio" id="view-together">Together mode<small>Everyone in one scene</small></button>
                 <hr />
                 <button role="menuitemcheckbox" id="view-bubbles">Don't show chat bubbles</button>
                 <button role="menuitem" id="view-full">Full screen</button>
@@ -490,6 +491,8 @@
             <div class="bubbles" id="bubbles" aria-live="polite"></div>
             <!-- In a breakout room: its name, the time left, and Return. -->
             <div class="bo-banner hidden" id="bo-banner" role="status"></div>
+            <!-- Together mode: everyone cut out of their rooms, seated in one scene. -->
+            <canvas class="together" id="together" hidden aria-label="Together mode"></canvas>
             <div class="caption hidden" id="caption"></div>
             <!-- "This meeting is being recorded." and, for a speaker not yet
                  asked, whether their speech may become text. -->
