@@ -53,6 +53,10 @@ type Conversation struct {
 	// MeetingRoom names the room this conversation was born in, for a
 	// meeting chat (see meetingchat.go); empty otherwise.
 	MeetingRoom string `json:"meetingRoom,omitempty"`
+
+	// TeamID is the team a channel belongs to (teams.go); empty for a
+	// conversation that is not a team's channel.
+	TeamID string `json:"teamId,omitempty"`
 	// Blocked is set on a direct conversation whose other person the viewer
 	// has blocked. Their own decision, shown back to them; never the
 	// reverse.
@@ -235,11 +239,12 @@ type Call struct {
 const MaxBodyLength = 8000
 
 var (
-	ErrNotFound  = errors.New("messaging: not found")
-	ErrForbidden = errors.New("messaging: not a member of that conversation")
-	ErrEmptyBody = errors.New("messaging: a message needs a body")
-	ErrTooLong   = errors.New("messaging: message is too long")
-	ErrNoMembers = errors.New("messaging: a conversation needs at least one other person")
+	ErrNotFound   = errors.New("messaging: not found")
+	ErrBadRequest = errors.New("messaging: that request is not valid")
+	ErrForbidden  = errors.New("messaging: not a member of that conversation")
+	ErrEmptyBody  = errors.New("messaging: a message needs a body")
+	ErrTooLong    = errors.New("messaging: message is too long")
+	ErrNoMembers  = errors.New("messaging: a conversation needs at least one other person")
 	// ErrTooManyTargets: a forward names more conversations than one person
 	// plausibly means at once.
 	ErrTooManyTargets = errors.New("messaging: too many conversations to forward to")
@@ -335,6 +340,25 @@ type Repository interface {
 	SetVotes(ctx context.Context, messageID, userID string, options []int, at time.Time) error
 	PollTalliesFor(ctx context.Context, userID string, messageIDs []string) (map[string]*PollTally, error)
 	DeleteConversation(ctx context.Context, convID string) ([]Attachment, error)
+
+	// Teams (teams.go).
+	CreateTeam(ctx context.Context, t *Team, owner TeamMember) error
+	TeamByID(ctx context.Context, id string) (*Team, error)
+	TeamByCode(ctx context.Context, code string) (*Team, error)
+	TeamRole(ctx context.Context, teamID, userID string) (string, error)
+	MyTeams(ctx context.Context, userID string) ([]*Team, error)
+	TeamChannelsFor(ctx context.Context, teamIDs []string, userID string) (map[string][]TeamChannel, error)
+	TeamConversations(ctx context.Context, teamID string) ([]*Conversation, error)
+	PublicTeams(ctx context.Context, userID, q string, limit int) ([]*Team, error)
+	TeamMembers(ctx context.Context, teamID string, limit int) ([]TeamMember, error)
+	AddTeamMember(ctx context.Context, teamID string, m TeamMember) (bool, error)
+	RemoveTeamMember(ctx context.Context, teamID, userID string) error
+	SetTeamRole(ctx context.Context, teamID, userID, role string) error
+	TeamOwnerCount(ctx context.Context, teamID string) (int, error)
+	UpdateTeam(ctx context.Context, t *Team) error
+	SetTeamCode(ctx context.Context, teamID, code string) error
+	DeleteTeam(ctx context.Context, teamID string) error
+	CountTeamChannels(ctx context.Context, teamID string) (int, error)
 
 	// Blocks.
 	Block(ctx context.Context, userID, blockedID string, at time.Time) error

@@ -19,7 +19,7 @@ type SQLRepository struct {
 
 func NewSQLRepository(db *database.DB) *SQLRepository { return &SQLRepository{db: db} }
 
-const convCols = `id, kind, title, created_by, created_at, last_message_at, topic, visibility, member_count, avatar_blob, pinned_message_id, meeting_room`
+const convCols = `id, kind, title, created_by, created_at, last_message_at, topic, visibility, member_count, avatar_blob, pinned_message_id, meeting_room, team_id`
 
 func (r *SQLRepository) CreateConversation(ctx context.Context, c *Conversation) error {
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -33,10 +33,10 @@ func (r *SQLRepository) CreateConversation(ctx context.Context, c *Conversation)
 		visibility = VisibilityPrivate
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO messaging_conversations (`+convCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO messaging_conversations (`+convCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, string(c.Kind), c.Title, c.CreatedBy,
 		c.CreatedAt.UnixMilli(), c.LastMessageAt.UnixMilli(),
-		c.Topic, visibility, len(c.Members), "", "", c.MeetingRoom); err != nil {
+		c.Topic, visibility, len(c.Members), "", "", c.MeetingRoom, c.TeamID); err != nil {
 		return fmt.Errorf("insert conversation: %w", err)
 	}
 	for _, m := range c.Members {
@@ -143,7 +143,7 @@ func (r *SQLRepository) ListConversations(ctx context.Context, userID string) ([
 		var fav, muted int
 		var avatar string
 		if err := rows.Scan(&c.ID, &kind, &c.Title, &c.CreatedBy, &created, &last,
-			&c.Topic, &c.Visibility, &c.MemberCount, &avatar, &c.PinnedMessageID, &c.MeetingRoom,
+			&c.Topic, &c.Visibility, &c.MemberCount, &avatar, &c.PinnedMessageID, &c.MeetingRoom, &c.TeamID,
 			&c.MyRole, &fav, &muted, &c.Mentions); err != nil {
 			return nil, err
 		}
@@ -1387,7 +1387,7 @@ func (r *SQLRepository) PublicChannels(ctx context.Context, viewerID, q string, 
 		SELECT c.id, c.title, c.topic, c.visibility, c.member_count, c.created_at, c.created_by,
 		       EXISTS (SELECT 1 FROM messaging_members m WHERE m.conversation_id = c.id AND m.user_id = ?) AS joined
 		  FROM messaging_conversations c
-		 WHERE c.kind = ? AND c.visibility = ?`+where+`
+		 WHERE c.kind = ? AND c.visibility = ? AND c.team_id = ''`+where+`
 		 ORDER BY c.title_key LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse channels: %w", err)
@@ -1601,7 +1601,7 @@ func scanConv(s rowScanner) (*Conversation, error) {
 	var created, last int64
 	var avatar string
 	if err := s.Scan(&c.ID, &kind, &c.Title, &c.CreatedBy, &created, &last,
-		&c.Topic, &c.Visibility, &c.MemberCount, &avatar, &c.PinnedMessageID, &c.MeetingRoom); err != nil {
+		&c.Topic, &c.Visibility, &c.MemberCount, &avatar, &c.PinnedMessageID, &c.MeetingRoom, &c.TeamID); err != nil {
 		return nil, err
 	}
 	c.Avatar = avatar != ""

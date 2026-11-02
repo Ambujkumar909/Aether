@@ -702,6 +702,45 @@ var migrations = []migration{
 	// "Did this account attend this room": who may read its transcript.
 	{"0059_scheduling_attendance_room_user_idx",
 		`CREATE INDEX IF NOT EXISTS scheduling_attendance_room_user ON scheduling_attendance(room, user_id)`},
+	// Teams (messaging/teams.go): containers above channels. A team owns its
+	// channels; a channel with no team is an organisation-wide one, as before.
+	{"0060_messaging_teams", `
+		CREATE TABLE IF NOT EXISTS messaging_teams (
+			id           TEXT PRIMARY KEY,
+			name         TEXT NOT NULL,
+			name_key     TEXT GENERATED ALWAYS AS (lower(name)) VIRTUAL,
+			description  TEXT NOT NULL DEFAULT '',
+			visibility   TEXT NOT NULL,
+			join_code    TEXT,
+			created_by   TEXT NOT NULL,
+			created_at   INTEGER NOT NULL,
+			member_count INTEGER NOT NULL DEFAULT 0
+		)`},
+	{"0061_messaging_teams_browse_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_teams_browse ON messaging_teams(visibility, name_key)`},
+	{"0062_messaging_teams_code_idx",
+		`CREATE UNIQUE INDEX IF NOT EXISTS messaging_teams_code ON messaging_teams(join_code) WHERE join_code IS NOT NULL`},
+	{"0063_messaging_team_members", `
+		CREATE TABLE IF NOT EXISTS messaging_team_members (
+			team_id   TEXT NOT NULL REFERENCES messaging_teams(id) ON DELETE CASCADE,
+			user_id   TEXT NOT NULL,
+			email     TEXT NOT NULL COLLATE NOCASE,
+			name      TEXT NOT NULL DEFAULT '',
+			role      TEXT NOT NULL,
+			joined_at INTEGER NOT NULL,
+			PRIMARY KEY (team_id, user_id)
+		) WITHOUT ROWID`},
+	{"0064_messaging_team_members_user_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_team_members_user ON messaging_team_members(user_id, team_id)`},
+	{"0065_messaging_conversations_team",
+		`ALTER TABLE messaging_conversations ADD COLUMN team_id TEXT NOT NULL DEFAULT ''`},
+	// Channel names are unique within their team (the organisation-wide ones
+	// share team '' and stay unique among themselves).
+	{"0066_messaging_channels_name_per_team", `
+		DROP INDEX IF EXISTS messaging_channels_name;
+		CREATE UNIQUE INDEX IF NOT EXISTS messaging_channels_team_name
+			ON messaging_conversations(team_id, title_key) WHERE kind = 'channel';
+		CREATE INDEX IF NOT EXISTS messaging_conversations_team ON messaging_conversations(team_id, kind)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

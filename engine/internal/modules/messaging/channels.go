@@ -85,12 +85,27 @@ func (s *Service) DeleteChannel(ctx context.Context, a Actor, convID string) err
 	if c.Kind != KindChannel {
 		return ErrNotFound
 	}
+	if c.TeamID != "" && c.Title == GeneralChannel {
+		return ErrGeneralChannel
+	}
 	role, err := s.repo.MemberOf(ctx, convID, a.ID)
-	if err != nil || role == nil {
+	if err != nil {
 		return ErrForbidden
 	}
-	if role.Role != RoleOwner {
-		return ErrNotOwner
+	// A team's owners may delete any of its channels; otherwise the
+	// channel's own owner.
+	teamOwner := false
+	if c.TeamID != "" {
+		r, _ := s.repo.TeamRole(ctx, c.TeamID, a.ID)
+		teamOwner = r == RoleOwner
+	}
+	if !teamOwner {
+		if role == nil {
+			return ErrForbidden
+		}
+		if role.Role != RoleOwner {
+			return ErrNotOwner
+		}
 	}
 	atts, err := s.repo.DeleteConversation(ctx, convID)
 	if err != nil {
@@ -190,6 +205,9 @@ func (s *Service) JoinChannel(ctx context.Context, a Actor, id string) (*Convers
 	} else if ok {
 		return s.decorate(ctx, a, c)
 	}
+	if c.TeamID != "" {
+		return nil, ErrTeamChannel // join the team instead
+	}
 	if c.Visibility != VisibilityPublic {
 		return nil, ErrNotJoinable
 	}
@@ -227,6 +245,9 @@ func (s *Service) AddMembers(ctx context.Context, a Actor, id string, emails []s
 	if err := s.mustBeMember(ctx, id, a.ID); err != nil {
 		return nil, nil, err
 	}
+	if err := s.teamChannelRule(ctx, c, ""); err != nil {
+		return nil, nil, err
+	}
 	if len(emails) > MaxAddAtOnce {
 		emails = emails[:MaxAddAtOnce]
 	}
@@ -251,6 +272,13 @@ func (s *Service) AddMembers(ctx context.Context, a Actor, id string, emails []s
 		}
 		if ok, _ := s.repo.IsMember(ctx, id, uid); ok {
 			continue
+		}
+		// A team's private channel takes only people on the team.
+		if c.TeamID != "" {
+			if role, _ := s.repo.TeamRole(ctx, c.TeamID, uid); role == "" {
+				skipped = append(skipped, e)
+				continue
+			}
 		}
 		add = append(add, Member{UserID: uid, Email: e, Name: name, JoinedAt: now, LastRead: now, Role: RoleMember})
 	}
@@ -298,6 +326,9 @@ func (s *Service) RemoveMember(ctx context.Context, a Actor, id, userID string) 
 	}
 	if c.Kind == KindDirect {
 		return ErrDirectFixed
+	}
+	if err := s.teamChannelRule(ctx, c, ""); err != nil {
+		return err // a standard channel: leave the team instead
 	}
 	me, err := s.repo.MemberOf(ctx, id, a.ID)
 	if err != nil {
@@ -364,6 +395,9 @@ func (s *Service) Rename(ctx context.Context, a Actor, id, title, topic string) 
 	topic = cleanTitle(topic, MaxChannelTopic)
 	if title == "" {
 		title = c.Title
+	}
+	if c.TeamID != "" && c.Title == GeneralChannel && title != GeneralChannel {
+		return nil, ErrGeneralChannel
 	}
 	if err := s.repo.UpdateConversation(ctx, id, title, topic); err != nil {
 		if isUniqueViolation(err) {

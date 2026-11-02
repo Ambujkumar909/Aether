@@ -58,6 +58,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/messaging/conversations/{id}/prefs", p(h.prefs))
 	mux.Handle("POST /api/messaging/conversations/{id}/unread", p(h.markUnread))
 	mux.Handle("DELETE /api/messaging/conversations/{id}", p(h.forget))
+	h.teamRoutes(mux, p)
 	mux.Handle("POST /api/messaging/channels", p(h.createChannel))
 	mux.Handle("GET /api/messaging/channels", p(h.browseChannels))
 	mux.Handle("POST /api/messaging/channels/{id}/join", p(h.joinChannel))
@@ -974,7 +975,31 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrTooManyTargets):
 		httpx.Error(w, http.StatusBadRequest, "too_many", "forward to at most 10 conversations at once")
 	case errors.Is(err, ErrChannelExists):
-		httpx.Error(w, http.StatusConflict, "exists", "a channel with that name already exists")
+		httpx.Error(w, http.StatusConflict, "exists", "Channel name is already taken.")
+	case errors.Is(err, ErrTeamName):
+		httpx.Error(w, http.StatusBadRequest, "team_name", "Give your team a name")
+	case errors.Is(err, ErrTeamNotOwner):
+		httpx.Error(w, http.StatusForbidden, "not_owner", "only team owners can do that")
+	case errors.Is(err, ErrTeamNotMember):
+		httpx.Error(w, http.StatusForbidden, "forbidden", "Either the team has been deleted or you are not a member.")
+	case errors.Is(err, ErrTeamPrivate):
+		httpx.Error(w, http.StatusForbidden, "private", "that team is private: ask an owner to add you, or use its team code")
+	case errors.Is(err, ErrTeamCode):
+		httpx.Error(w, http.StatusNotFound, "bad_code", "no team has that code")
+	case errors.Is(err, ErrTeamFull):
+		httpx.Error(w, http.StatusConflict, "team_full", "this team has reached its limit of members")
+	case errors.Is(err, ErrTeamChannels):
+		httpx.Error(w, http.StatusConflict, "too_many_channels", "this team has reached its limit of channels")
+	case errors.Is(err, ErrTeamChannel):
+		httpx.Error(w, http.StatusConflict, "team_channel", "Everyone on the team has access. Join or leave the team instead.")
+	case errors.Is(err, ErrGeneralChannel):
+		httpx.Error(w, http.StatusConflict, "general", "the General channel can't be deleted or renamed")
+	case errors.Is(err, ErrNotOnTeam):
+		httpx.Error(w, http.StatusConflict, "not_on_team", "only people on the team can be added to its channels")
+	case errors.Is(err, ErrLastOwner):
+		httpx.Error(w, http.StatusConflict, "last_owner", "a team needs an owner: make someone else an owner first")
+	case errors.Is(err, ErrBadRequest):
+		httpx.Error(w, http.StatusBadRequest, "bad_request", "that request is not valid")
 	case errors.Is(err, ErrBadName):
 		httpx.Error(w, http.StatusBadRequest, "bad_name", "a channel needs a name")
 	case errors.Is(err, ErrNotOwner):
