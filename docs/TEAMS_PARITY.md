@@ -93,7 +93,8 @@ ecosystem.
 | Channel picture, topic, rename, pin | Built | |
 | Add members with history option | Built | none / last N days / all |
 | Delete channel (owner) | Built | Files removed with it |
-| Teams as a container above channels; org-wide teams; tags; tabs/apps | Not built | Aether's unit is the conversation; no app platform |
+| Teams as a container above channels: owners/members, public/private, join codes, General, standard and private channels | Built | §6bp; `messaging/teams.go`, Teams in the rail |
+| Org-wide teams; tags; tabs/apps; guests; shared channels; archiving | Not built | Teams' enterprise layer; no app platform |
 | Limits (Teams: 250 in a group chat, 1,000 channels, 100 KB post) | Built (own) | Body 4,000 chars, 10 files, 100 MB, 20 mentions/200 for everyone — each bound tested one over |
 
 ## Meetings and calls

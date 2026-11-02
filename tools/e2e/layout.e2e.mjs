@@ -223,6 +223,48 @@ const SCREENS = [
     },
   },
   {
+    // Teams: the list (a team made for the screen, if there is none yet).
+    name: 'teams',
+    go: async (page) => {
+      await page.evaluate(() => document.querySelector('[data-cancel]')?.click());
+      await sleep(200);
+      await page.evaluate(async () => {
+        const m = (await import('/src/api.js')).messaging;
+        const mine = (await m.teams()).teams ?? [];
+        if (!mine.some((t) => t.name === 'Layout team')) {
+          const t = await m.createTeam('Layout team', 'For the layout harness', 'public');
+          await m.createTeamChannel(t.id, 'Design reviews', '', false);
+          await m.createTeamChannel(t.id, 'Leads', '', true);
+        }
+      });
+      await page.evaluate(() => document.querySelector('[data-home="teams"]')?.click());
+      await sleep(1200);
+    },
+  },
+  {
+    name: 'teams-channel',
+    go: async (page) => {
+      await page.evaluate(() => document.querySelector('#teams-list .tch')?.click());
+      await sleep(1000);
+    },
+  },
+  {
+    name: 'teams-join',
+    go: async (page) => {
+      await page.evaluate(() => document.getElementById('c-back')?.click());
+      await sleep(300);
+      await page.evaluate(() => document.getElementById('t-join')?.click());
+      await sleep(900);
+    },
+  },
+  {
+    name: 'teams-create',
+    go: async (page) => {
+      await page.evaluate(() => document.querySelector('#dialog [data-create]')?.click());
+      await sleep(500);
+    },
+  },
+  {
     name: 'calendar',
     go: async (page) => {
       await page.evaluate(() => document.querySelector('[data-cancel]')?.click());

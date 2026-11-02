@@ -7395,3 +7395,53 @@ h2 .who-link { font: inherit; }
 /* Together mode: the scene over the stage, under the banners and captions. */
 .together { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 6; display: block; border-radius: var(--r-md); }
 .together[hidden] { display: none; }
+
+/* --------------------------------- Teams ---------------------------------- */
+
+.teams-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin: 0 -6px; }
+.teams-empty { padding: 12px 8px; color: var(--ink-2); font-size: var(--t-small); line-height: 1.5; }
+.teams-empty p { margin: 0 0 6px; }
+.team-row { display: flex; align-items: center; gap: 2px; border-radius: var(--r-md); }
+.team-row:hover { background: var(--surface); }
+.team-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px; min-height: 44px; border: 0; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; border-radius: var(--r-md); }
+.team-chev { flex: none; color: var(--ink-3); transition: transform var(--speed) var(--ease); }
+.team-toggle[aria-expanded="false"] .team-chev { transform: rotate(-90deg); }
+.team-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar.square { border-radius: var(--r-sm); }
+.team-more { flex: none; opacity: 0; }
+.team-row:hover .team-more, .team-row:focus-within .team-more { opacity: 1; }
+.team-chans { display: flex; flex-direction: column; gap: 1px; padding-left: 34px; }
+.team-chans[hidden] { display: none; }
+.tch { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 36px; padding: 6px 10px; border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-2); font: inherit; font-size: var(--t-body); text-align: left; cursor: pointer; }
+.tch:hover { background: var(--surface); color: var(--ink); }
+.tch.active { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.tch.unread { color: var(--ink); font-weight: 700; }
+.tch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tch-lock { flex: none; color: var(--ink-3); }
+.tch-n { flex: none; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--brand); color: var(--brand-ink); font-size: 11px; font-weight: 700; text-align: center; line-height: 20px; }
+.teams-join { width: 100%; justify-content: center; gap: 8px; }
+
+.teams-dialog { width: min(560px, 100%); }
+.tj-row { margin: 4px 0 14px; }
+.tj-code { margin-bottom: 14px; }
+.tj-code-row { display: flex; gap: 8px; }
+.tj-code-row .input { flex: 1; font-family: var(--mono, monospace); letter-spacing: 0.12em; }
+.tj-list { display: grid; gap: 6px; margin-top: 8px; max-height: 320px; overflow-y: auto; }
+.tj-team { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: var(--r-md); background: var(--surface); }
+.tj-meta { flex: 1; min-width: 0; display: grid; }
+.tj-meta small { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tj-note { color: var(--ink-3); font-size: var(--t-small); margin: 6px 0; }
+.tmm-h { margin: 14px 0 6px; font-size: var(--t-small); color: var(--ink-2); font-weight: 600; }
+.tmm-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.tmm-name { flex: 1; min-width: 0; display: grid; }
+.tmm-name small { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; }
+.tmm-role { width: auto; min-width: 104px; }
+.tmm-role-label { color: var(--ink-3); font-size: var(--t-small); }
+.team-code { font-size: 32px; letter-spacing: 0.2em; text-align: center; padding: 16px; margin: 8px 0; border-radius: var(--r-md); background: var(--surface); color: var(--ink); }
+
+@media (pointer: coarse) {
+  .tch { min-height: 44px; }
+  .team-more { opacity: 1; min-width: 44px; min-height: 44px; }
+  .tmm-row .icon-btn { min-width: 44px; min-height: 44px; }
+}
+.tj-code-row .input::placeholder { letter-spacing: normal; font-family: inherit; }

@@ -105,6 +105,9 @@ func TestTeamCreateJoinAndChannels(t *testing.T) {
 	if got := myTeam(t, s, you, tm.ID); len(got.Channels) != 2 {
 		t.Fatalf("you see the private channel you are not in: %+v", got.Channels)
 	}
+	if got := myTeam(t, s, me, tm.ID); got.Channels[0].Title != GeneralChannel || got.Channels[1].Title != "Leads" {
+		t.Fatalf("General first, then by name: %+v", got.Channels)
+	}
 	_, skipped, err := s.AddMembers(ctx, me, priv.ID, []string{"third@example.com", "other@example.com"})
 	if err != nil || len(skipped) != 1 || skipped[0] != "third@example.com" {
 		t.Fatalf("adding to a private team channel: skipped %v err %v", skipped, err)

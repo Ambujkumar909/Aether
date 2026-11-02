@@ -53,6 +53,8 @@ a test in this repository. Where a measurement was disappointing, it is publishe
 **Chat, the way teams actually talk.** One-to-one, groups, channels with threaded posts,
 replies, reactions, mentions, edits with history, forwarding, files, voice messages, polls,
 scheduled send, read receipts, typing indicators and presence that knows when you are in a call.
+**Teams** hold channels: public ones anyone in your organisation can find, private ones
+reached by a seven-character code, each with a General channel and private channels inside.
 
 </td>
 <td width="50%" valign="top">
@@ -314,8 +316,7 @@ with the numbers in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - **Spatial audio** for Together mode, and segmentation in a worker so effects cost the page
   nothing. (A GPU compositor was built, measured as no faster, and removed.)
-- **Teams as containers above channels**, an activity feed, and calendar views with a
-  scheduling assistant.
+- **An activity feed**, and calendar views with a scheduling assistant.
 - **Server-side recording** linked from the meeting chat, and a Word transcript.
 - **Native mobile apps.** The web client already adapts to phones today.
 

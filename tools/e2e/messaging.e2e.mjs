@@ -831,15 +831,17 @@ await section('files: a forward carries them', async () => {
 });
 
 await section('directory: a full address finds a person by name; fragments of outsiders find nothing', async () => {
-  // C shares no conversation with A: a stranger. B is A's contact, and
-  // contacts are searchable by fragment on purpose -- so the outsider cases
-  // use C.
-  const hit = (await A.get(`/api/identity/directory?q=${encodeURIComponent(C.email)}&limit=20`)).json;
-  eq((hit.people ?? []).map((p) => p.name), ['E2E C'], 'a full address resolves a stranger to their name');
-  const frag = (await A.get(`/api/identity/directory?q=${encodeURIComponent(C.email.slice(0, 12))}&limit=20`)).json;
-  ok(!(frag.people ?? []).some((p) => p.email === C.email), 'a fragment of a stranger\'s address finds nobody');
+  // X is an account no harness ever puts in a conversation: a stranger to A
+  // on every run. (C is not: the accounts are reused, and later sections and
+  // other harnesses chat with C.) B is A's contact, and contacts are
+  // searchable by fragment on purpose.
+  const X = await signup('Stranger');
+  const hit = (await A.get(`/api/identity/directory?q=${encodeURIComponent(X.email)}&limit=20`)).json;
+  eq((hit.people ?? []).map((p) => p.name), ['E2E Stranger'], 'a full address resolves a stranger to their name');
+  const frag = (await A.get(`/api/identity/directory?q=${encodeURIComponent(X.email.slice(0, 12))}&limit=20`)).json;
+  ok(!(frag.people ?? []).some((p) => p.email === X.email), 'a fragment of a stranger\'s address finds nobody');
   const bare = (await A.get(`/api/identity/directory?q=%40example.test&limit=20`)).json;
-  ok(!(bare.people ?? []).some((p) => p.email === C.email), 'a bare domain does not walk to a stranger');
+  ok(!(bare.people ?? []).some((p) => p.email === X.email), 'a bare domain does not walk to a stranger');
   const contact = (await A.get(`/api/identity/directory?q=${encodeURIComponent(B.email.slice(0, 12))}&limit=20`)).json;
   ok((contact.people ?? []).some((p) => p.email === B.email), 'a contact is found by a fragment');
   eq((await new Client('anon').get('/api/identity/directory?q=e2e')).status, 401, 'anonymous directory');

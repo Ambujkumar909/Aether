@@ -185,7 +185,7 @@ func (r *SQLRepository) TeamChannelsFor(ctx context.Context, teamIDs []string, u
 		SELECT c.team_id, c.id, c.title, c.visibility FROM messaging_conversations c
 		 WHERE c.team_id IN (`+ph+`) AND c.kind = ?
 		   AND (c.visibility = 'public' OR EXISTS (SELECT 1 FROM messaging_members m WHERE m.conversation_id = c.id AND m.user_id = ?))
-		 ORDER BY c.team_id, c.title_key`, args...)
+		 ORDER BY c.team_id, c.title_key <> 'general', c.title_key`, args...) // General first, as in Teams
 	if err != nil {
 		return nil, err
 	}

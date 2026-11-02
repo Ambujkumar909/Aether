@@ -222,6 +222,9 @@ export function whoOf(c) {
     const u = session.user;
     return { userId: u?.id, name: u?.displayName, email: u?.email };
   }
+  // A team's channel is named with its team, as Teams heads it.
+  const team = c.teamId ? (state.teams ?? []).find((t) => t.id === c.teamId) : null;
+  if (team) return { name: `${team.name} › ${c.title}` };
   return { name: c.display || c.title || 'Conversation' };
 }
 
@@ -784,6 +787,7 @@ async function markRead(convId) {
 // ---------------------------------------------------------------------------
 
 export function renderChatSurface() {
+  state.surface = 'chat';
   const main = document.querySelector('.home-main');
   main.innerHTML = `
     <div class="chat-shell${state.active ? ' showing-thread' : ''}">
@@ -991,6 +995,7 @@ function renderChatSurfaceFilters() {
 }
 
 function renderList() {
+  if (state.surface === 'teams') return renderTeamsList();
   const box = $('conv-list');
   if (!box) return;
   const q = ($('c-search')?.value ?? '').toLowerCase();
@@ -1297,7 +1302,7 @@ function renderThread() {
         <h2>${
           peerOf(state.active)
             ? `<button class="who-link" data-person="${esc(peerOf(state.active).userId)}" data-person-name="${esc(state.active.display)}">${esc(state.active.display)}</button>`
-            : esc(state.active.display)
+            : esc(state.active.teamId ? whoOf(state.active).name : state.active.display)
         }</h2>
         <span>${
           state.active.kind === 'group' || state.active.kind === 'channel'
@@ -4674,3 +4679,483 @@ document.addEventListener('click', (e) => {
     })
   );
 });
+
+// ---------------------------------------------------------------------------
+// Teams (engine messaging/teams.go)
+//
+// Teams' "Teams" view: your teams down the left, each with its channels, and
+// the channel itself on the right -- the same thread as any chat, since a
+// team's channel is a channel. Joining a team puts you in General and every
+// standard channel; private channels show only to the people in them.
+// ---------------------------------------------------------------------------
+
+const teamFolded = new Set();
+
+export async function renderTeamsSurface() {
+  state.surface = 'teams';
+  const main = document.querySelector('.home-main');
+  main.innerHTML = `
+    <div class="chat-shell teams-shell${state.active?.teamId ? ' showing-thread' : ''}">
+      <aside class="conv-col teams-col">
+        <div class="conv-head">
+          <h1>Teams</h1>
+          <button class="icon-btn" id="t-join-top" title="Join or create a team" aria-label="Join or create a team">
+            <svg width="18" height="18" viewBox="0 0 24 24"><use href="#i-plus"/></svg>
+          </button>
+        </div>
+        <div class="teams-list" id="teams-list" role="tree" aria-label="Your teams"></div>
+        <button class="btn teams-join" id="t-join"><svg width="15" height="15" viewBox="0 0 24 24"><use href="#i-people"/></svg> Join or create a team</button>
+      </aside>
+      <section class="thread" id="thread"></section>
+    </div>`;
+  $('t-join').onclick = $('t-join-top').onclick = () => joinOrCreateDialog();
+  if (state.active && !state.active.teamId) state.active = null;
+  renderThread();
+  renderTeamsList();
+  await loadTeams();
+}
+
+async function loadTeams() {
+  try {
+    const [t] = await Promise.all([messaging.teams(), state.conversations.length ? null : refresh()]);
+    state.teams = t.teams ?? [];
+  } catch (e) {
+    state.teams = state.teams ?? [];
+    toastErr(e);
+  }
+  renderTeamsList();
+}
+
+function teamOf(teamId) {
+  return (state.teams ?? []).find((t) => t.id === teamId);
+}
+
+function renderTeamsList() {
+  const box = $('teams-list');
+  if (!box) return;
+  const teams = state.teams ?? [];
+  if (!teams.length) {
+    box.innerHTML = `<div class="teams-empty"><p><b>You are not on a team yet.</b></p><p>Create one for a project or a group of people, or join one with a code.</p></div>`;
+    return;
+  }
+  const unreadOf = (id) => state.conversations.find((c) => c.id === id)?.unread ?? 0;
+  box.innerHTML = teams
+    .map((t) => {
+      const folded = teamFolded.has(t.id);
+      const chans = (t.channels ?? [])
+        .map((ch) => {
+          const n = unreadOf(ch.id);
+          const on = state.active?.id === ch.id;
+          return `<button class="tch${on ? ' active' : ''}${n ? ' unread' : ''}" data-tch="${esc(ch.id)}" role="treeitem" aria-current="${on}">
+            ${ch.visibility === 'private' ? '<svg class="tch-lock" width="12" height="12" viewBox="0 0 24 24" aria-label="Private"><use href="#i-lock"/></svg>' : ''}
+            <span class="tch-name">${esc(ch.title)}</span>${n ? `<span class="tch-n">${n > 99 ? '99+' : n}</span>` : ''}</button>`;
+        })
+        .join('');
+      return `<div class="team" data-team="${esc(t.id)}">
+        <div class="team-row">
+          <button class="team-toggle" data-fold="${esc(t.id)}" aria-expanded="${!folded}">
+            <svg class="team-chev" width="12" height="12" viewBox="0 0 24 24"><use href="#i-chevron"/></svg>
+            <span ${avatarAttrs({ name: t.name }, 'sm square')}>${esc(initials({ name: t.name }))}</span>
+            <span class="team-name">${esc(t.name)}</span>
+          </button>
+          <button class="icon-btn team-more" data-tmore="${esc(t.id)}" aria-label="More options for ${esc(t.name)}" aria-haspopup="menu">
+            <svg width="16" height="16" viewBox="0 0 24 24"><use href="#i-more"/></svg>
+          </button>
+        </div>
+        <div class="team-chans" role="group"${folded ? ' hidden' : ''}>${chans}</div>
+      </div>`;
+    })
+    .join('');
+  box.querySelectorAll('[data-fold]').forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.fold;
+      if (teamFolded.has(id)) teamFolded.delete(id);
+      else teamFolded.add(id);
+      renderTeamsList();
+    };
+  });
+  box.querySelectorAll('[data-tch]').forEach((b) => {
+    b.onclick = async () => {
+      let c = state.conversations.find((x) => x.id === b.dataset.tch);
+      if (!c) {
+        await refresh();
+        c = state.conversations.find((x) => x.id === b.dataset.tch);
+      }
+      if (c) open(c);
+      else teamWarn('That channel is not available.');
+    };
+  });
+  box.querySelectorAll('[data-tmore]').forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const r = b.getBoundingClientRect();
+      teamMenu(teamOf(b.dataset.tmore), r.left, r.bottom + 4);
+    };
+  });
+}
+
+function teamMenu(t, x, y) {
+  if (!t) return;
+  closeConvMenu();
+  const owner = t.myRole === 'owner';
+  const el = document.createElement('div');
+  el.className = 'ctx-menu';
+  el.setAttribute('role', 'menu');
+  const item = (key, label, icon, danger = false) =>
+    `<button role="menuitem" data-act="${key}" class="${danger ? 'danger' : ''}"><svg width="15" height="15" viewBox="0 0 24 24"><use href="#${icon}"/></svg>${label}</button>`;
+  el.innerHTML =
+    item('manage', 'Manage team', 'i-people') +
+    item('channel', 'Add channel', 'i-plus') +
+    (owner ? item('member', 'Add member', 'i-person-add') + item('code', 'Team code', 'i-link') + item('edit', 'Edit team', 'i-pencil') : '') +
+    '<div class="ctx-sep"></div>' +
+    item('leave', 'Leave team', 'i-back', true) +
+    (owner ? item('delete', 'Delete team', 'i-trash', true) : '');
+  document.body.appendChild(el);
+  const w = el.offsetWidth || 220, h = el.offsetHeight || 260;
+  el.style.left = `${Math.min(Math.max(8, x), innerWidth - w - 8)}px`;
+  el.style.top = `${y + h > innerHeight - 8 ? Math.max(8, y - h - 40) : y}px`;
+  convMenuEl = el;
+  el.querySelectorAll('[data-act]').forEach((b) => {
+    b.onclick = () => {
+      closeConvMenu();
+      ({ manage: manageTeamDialog, channel: teamChannelDialog, member: addTeamMemberDialog, code: teamCodeDialog, edit: editTeamDialog, leave: leaveTeamDialog, delete: deleteTeamDialog })[b.dataset.act]?.(t);
+    };
+  });
+  setTimeout(() => addEventListener('click', closeConvMenu, { once: true }), 0);
+}
+
+// Create, join with a code, or browse public teams.
+function joinOrCreateDialog() {
+  const { host, close, arm } = dialogHost();
+  host.innerHTML = `
+    <div class="dialog-card teams-dialog" role="dialog" aria-modal="true" aria-labelledby="tj-title">
+      <h2 id="tj-title">Join or create a team</h2>
+      <div class="tj-row">
+        <button class="btn btn-primary" data-create>Create team</button>
+      </div>
+      <form class="tj-code" id="tj-code">
+        <label class="field"><span>Join a team with a code</span>
+          <div class="tj-code-row"><input class="input" name="code" maxlength="7" placeholder="Enter join code." autocomplete="off" spellcheck="false" /><button class="btn" type="submit">Join</button></div></label>
+      </form>
+      <label class="field"><span>Public teams</span><input class="input" id="tj-q" placeholder="Search for teams" autocomplete="off" /></label>
+      <div class="tj-list" id="tj-list"><p class="tj-note">Loading…</p></div>
+      <div class="dialog-actions"><span class="spacer"></span><button class="btn" data-cancel>Close</button></div>
+    </div>`;
+  arm();
+  host.querySelector('[data-create]').onclick = () => {
+    close();
+    createTeamDialog();
+  };
+  $('tj-code').onsubmit = async (e) => {
+    e.preventDefault();
+    const code = new FormData(e.target).get('code')?.toString().trim();
+    if (!code) return;
+    try {
+      const t = await messaging.joinTeamByCode(code);
+      close();
+      toastOk(`You joined ${t.name}`);
+      await loadTeams();
+    } catch (err) {
+      toastErr(err);
+    }
+  };
+  let seq = 0;
+  const search = async () => {
+    const my = ++seq;
+    try {
+      const res = await messaging.browseTeams($('tj-q').value.trim());
+      if (my !== seq) return; // a stale answer
+      const list = (res.teams ?? []).filter((t) => !t.myRole);
+      $('tj-list').innerHTML = list.length
+        ? list
+            .map(
+              (t) => `<div class="tj-team"><span ${avatarAttrs({ name: t.name }, 'sm square')}>${esc(initials({ name: t.name }))}</span>
+                <span class="tj-meta"><b>${esc(t.name)}</b><small>${esc(t.description || '')}${t.description ? ' · ' : ''}${t.memberCount} member${t.memberCount === 1 ? '' : 's'}</small></span>
+                <button class="btn sm" data-join="${esc(t.id)}">Join team</button></div>`
+            )
+            .join('')
+        : '<p class="tj-note">No public teams to join.</p>';
+      $('tj-list').querySelectorAll('[data-join]').forEach((b) => {
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            const t = await messaging.joinTeam(b.dataset.join);
+            close();
+            toastOk(`You joined ${t.name}`);
+            await loadTeams();
+          } catch (err) {
+            b.disabled = false;
+            toastErr(err);
+          }
+        };
+      });
+    } catch (err) {
+      toastErr(err);
+    }
+  };
+  $('tj-q').oninput = search;
+  search();
+}
+
+function seg(name, options, value) {
+  return `<div class="seg" role="radiogroup" aria-label="${esc(name)}">${options
+    .map(
+      (o) => `<button type="button" class="seg-b${o.value === value ? ' active' : ''}" data-seg="${esc(o.value)}" role="radio" aria-checked="${o.value === value}"><b>${esc(o.label)}</b><small>${esc(o.hint)}</small></button>`
+    )
+    .join('')}</div>`;
+}
+
+function wireSeg(host, onPick) {
+  host.querySelectorAll('[data-seg]').forEach((b) => {
+    b.onclick = () => {
+      host.querySelectorAll('[data-seg]').forEach((x) => {
+        x.classList.toggle('active', x === b);
+        x.setAttribute('aria-checked', String(x === b));
+      });
+      onPick(b.dataset.seg);
+    };
+  });
+}
+
+const PRIVACY = [
+  { value: 'private', label: 'Private', hint: 'Only team owners can add members' },
+  { value: 'public', label: 'Public', hint: 'Anyone in your organization can join' },
+];
+
+function createTeamDialog(edit = null) {
+  const { host, close, arm } = dialogHost();
+  let vis = edit?.visibility ?? 'private';
+  host.innerHTML = `
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="tc-title">
+      <h2 id="tc-title">${edit ? 'Edit team' : 'Create team'}</h2>
+      <label class="field"><span>Team name</span><input id="tc-name" class="input" maxlength="80" placeholder="Give your team a name" autocomplete="off" value="${esc(edit?.name ?? '')}" /></label>
+      <label class="field" style="margin-top:10px"><span>Description <small>(optional)</small></span><textarea id="tc-desc" class="input" rows="2" maxlength="1024" placeholder="Let people know what this team is all about">${esc(edit?.description ?? '')}</textarea></label>
+      <div style="margin-top:12px">${seg('Privacy', PRIVACY, vis)}</div>
+      <div class="dialog-actions"><button class="btn" data-cancel>Cancel</button><button class="btn btn-primary" data-confirm ${edit ? '' : 'disabled'}>${edit ? 'Save' : 'Create'}</button></div>
+    </div>`;
+  arm();
+  wireSeg(host, (v) => (vis = v));
+  const ok = host.querySelector('[data-confirm]');
+  $('tc-name').oninput = () => (ok.disabled = !$('tc-name').value.trim());
+  setTimeout(() => $('tc-name')?.focus(), 50);
+  ok.onclick = async () => {
+    ok.disabled = true;
+    try {
+      const name = $('tc-name').value.trim(), description = $('tc-desc').value.trim();
+      if (edit) await messaging.updateTeam(edit.id, { name, description, visibility: vis });
+      else {
+        const t = await messaging.createTeam(name, description, vis);
+        teamFolded.delete(t.id);
+      }
+      close();
+      await refresh();
+      await loadTeams();
+    } catch (e) {
+      ok.disabled = false;
+      toastErr(e);
+    }
+  };
+}
+
+const editTeamDialog = (t) => createTeamDialog(t);
+
+function teamChannelDialog(t) {
+  const { host, close, arm } = dialogHost();
+  let vis = 'standard';
+  host.innerHTML = `
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="tch-title">
+      <h2 id="tch-title">Create a channel for "${esc(t.name)}" team</h2>
+      <label class="field"><span>Channel name</span><input id="tch-name" class="input" maxlength="60" autocomplete="off" /></label>
+      <label class="field" style="margin-top:10px"><span>Description <small>(optional)</small></span><input id="tch-topic" class="input" maxlength="240" placeholder="Help others find the right channel" autocomplete="off" /></label>
+      <div style="margin-top:12px">${seg('Privacy', [
+        { value: 'standard', label: 'Standard', hint: 'Everyone on the team has access' },
+        { value: 'private', label: 'Private', hint: 'Only for people added' },
+      ], vis)}</div>
+      <div class="dialog-actions"><button class="btn" data-cancel>Cancel</button><button class="btn btn-primary" data-confirm disabled>Create</button></div>
+    </div>`;
+  arm();
+  wireSeg(host, (v) => (vis = v));
+  const ok = host.querySelector('[data-confirm]');
+  $('tch-name').oninput = () => (ok.disabled = !$('tch-name').value.trim());
+  setTimeout(() => $('tch-name')?.focus(), 50);
+  ok.onclick = async () => {
+    ok.disabled = true;
+    try {
+      const c = await messaging.createTeamChannel(t.id, $('tch-name').value.trim(), $('tch-topic').value.trim(), vis === 'private');
+      close();
+      await refresh();
+      await loadTeams();
+      open(state.conversations.find((x) => x.id === c.id) ?? c);
+    } catch (e) {
+      ok.disabled = false;
+      toastErr(e);
+    }
+  };
+}
+
+function addTeamMemberDialog(t) {
+  const { host, close, arm } = dialogHost();
+  host.innerHTML = `
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="tm-title">
+      <h2 id="tm-title">Add members to ${esc(t.name)}</h2>
+      <label class="field"><span>Start typing a name or email.</span><input id="tm-search" class="input" placeholder="Type a name or email" autocomplete="off" /></label>
+      <div class="picked" id="tm-picked"></div>
+      <div class="people-list compact" id="tm-people"></div>
+      <div class="dialog-actions"><button class="btn" data-cancel>Cancel</button><button class="btn btn-primary" data-confirm>Add</button></div>
+    </div>`;
+  arm();
+  const picker = peoplePicker($('tm-search'), $('tm-people'), $('tm-picked'), () => {}, { exclude: new Set([session.user?.id]) });
+  host.querySelector('[data-confirm]').onclick = async () => {
+    const people = [...picker.chosen.values()];
+    if (!people.length) return close();
+    try {
+      const res = await messaging.addTeamMembers(t.id, people.map((p) => p.email));
+      picker.cancel();
+      close();
+      const added = people.length - (res.skipped?.length ?? 0);
+      toastOk(`${added} ${added === 1 ? 'person' : 'people'} added to team`);
+      if (res.skipped?.length) teamWarn(`Could not add: ${res.skipped.join(', ')}`);
+      await loadTeams();
+    } catch (e) {
+      toastErr(e);
+    }
+  };
+}
+
+async function manageTeamDialog(t) {
+  const { host, close, arm } = dialogHost();
+  const owner = t.myRole === 'owner';
+  const draw = (members) => {
+    const row = (m) => `<div class="tmm-row">
+        <span ${avatarAttrs({ userId: m.userId, name: m.name, email: m.email }, 'sm')}>${esc(initials({ userId: m.userId, name: m.name, email: m.email }))}</span>
+        <span class="tmm-name"><b>${esc(m.name || m.email)}${m.userId === session.user?.id ? ' (You)' : ''}</b><small>${esc(m.email)}</small></span>
+        ${owner && m.userId !== session.user?.id
+          ? `<select class="input tmm-role" data-role="${esc(m.userId)}" aria-label="Role of ${esc(m.name || m.email)}"><option value="owner"${m.role === 'owner' ? ' selected' : ''}>Owner</option><option value="member"${m.role === 'member' ? ' selected' : ''}>Member</option></select>
+             <button class="icon-btn" data-remove="${esc(m.userId)}" aria-label="Remove from team"><svg width="15" height="15" viewBox="0 0 24 24"><use href="#i-close"/></svg></button>`
+          : `<span class="tmm-role-label">${m.role === 'owner' ? 'Owner' : 'Member'}</span>`}
+      </div>`;
+    const owners = members.filter((m) => m.role === 'owner'), rest = members.filter((m) => m.role !== 'owner');
+    host.innerHTML = `
+      <div class="dialog-card teams-dialog" role="dialog" aria-modal="true" aria-labelledby="mt-title">
+        <h2 id="mt-title">${esc(t.name)}</h2>
+        <p class="tj-note">${t.visibility === 'public' ? 'Public - Anyone in your organization can join' : 'Private - Only team owners can add members'} · ${members.length} member${members.length === 1 ? '' : 's'}</p>
+        <h3 class="tmm-h">Owners (${owners.length})</h3>${owners.map(row).join('')}
+        <h3 class="tmm-h">Members and guests (${rest.length})</h3>${rest.map(row).join('') || '<p class="tj-note">Nobody else yet.</p>'}
+        <div class="dialog-actions">${owner ? '<button class="btn" data-add>Add member</button>' : ''}<span class="spacer"></span><button class="btn" data-cancel>Close</button></div>
+      </div>`;
+    arm();
+    host.querySelector('[data-add]')?.addEventListener('click', () => {
+      close();
+      addTeamMemberDialog(t);
+    });
+    host.querySelectorAll('[data-role]').forEach((s) =>
+      s.addEventListener('change', async () => {
+        try {
+          await messaging.setTeamRole(t.id, s.dataset.role, s.value);
+        } catch (e) {
+          toastErr(e);
+        }
+        load();
+      })
+    );
+    host.querySelectorAll('[data-remove]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        try {
+          await messaging.removeTeamMember(t.id, b.dataset.remove);
+          toastOk('Removed from team');
+        } catch (e) {
+          toastErr(e);
+        }
+        load();
+      })
+    );
+  };
+  const load = async () => {
+    try {
+      const res = await messaging.teamMembers(t.id);
+      draw(res.members ?? []);
+    } catch (e) {
+      close();
+      toastErr(e);
+    }
+  };
+  host.innerHTML = '<div class="dialog-card"><p class="tj-note">Loading…</p></div>';
+  arm();
+  load();
+}
+
+function teamCodeDialog(t) {
+  const { host, close, arm } = dialogHost();
+  const draw = (code) => {
+    host.innerHTML = `
+      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="tcd-title">
+        <h2 id="tcd-title">Team code</h2>
+        ${code
+          ? `<p class="team-code mono" aria-label="Team code is ${esc(code)}">${esc(code)}</p><p class="tj-note">Share it with people who should join ${esc(t.name)}. Anyone with the code can join.</p>`
+          : '<p class="tj-note">Generate a team code people can use to join this team.</p>'}
+        <div class="dialog-actions">
+          ${code ? '<button class="btn" data-remove>Remove</button><button class="btn" data-reset>Reset</button><button class="btn" data-copy>Copy</button>' : '<button class="btn btn-primary" data-gen>Generate</button>'}
+          <span class="spacer"></span><button class="btn" data-cancel>Close</button>
+        </div>
+      </div>`;
+    arm();
+    const gen = async () => {
+      try {
+        const res = await messaging.teamCode(t.id);
+        t.joinCode = res.code;
+        draw(res.code);
+      } catch (e) {
+        toastErr(e);
+      }
+    };
+    host.querySelector('[data-gen]')?.addEventListener('click', gen);
+    host.querySelector('[data-reset]')?.addEventListener('click', gen);
+    host.querySelector('[data-copy]')?.addEventListener('click', () => navigator.clipboard?.writeText(code).then(() => toastOk('Copied')));
+    host.querySelector('[data-remove]')?.addEventListener('click', async () => {
+      try {
+        await messaging.removeTeamCode(t.id);
+        t.joinCode = '';
+        draw('');
+      } catch (e) {
+        toastErr(e);
+      }
+    });
+  };
+  draw(t.joinCode || '');
+}
+
+function confirmTeam(title, body, yes, run) {
+  const { host, close, arm } = dialogHost();
+  host.innerHTML = `
+    <div class="dialog-card" role="alertdialog" aria-modal="true" aria-labelledby="tx-title">
+      <h2 id="tx-title">${esc(title)}</h2><p>${esc(body)}</p>
+      <div class="dialog-actions"><span class="spacer"></span><button class="btn" data-cancel>Cancel</button><button class="btn btn-danger" data-confirm>${esc(yes)}</button></div>
+    </div>`;
+  arm();
+  host.querySelector('[data-confirm]').onclick = async () => {
+    try {
+      await run();
+      close();
+      if (state.active?.teamId) state.active = null;
+      await refresh();
+      await loadTeams();
+      renderThread();
+    } catch (e) {
+      toastErr(e);
+    }
+  };
+}
+
+const leaveTeamDialog = (t) =>
+  confirmTeam(`Leave the team "${t.name}"?`, "You'll leave all of its channels, and won't see new posts unless someone adds you again.", 'Leave team', () => messaging.removeTeamMember(t.id, session.user?.id));
+const deleteTeamDialog = (t) =>
+  confirmTeam(`Delete the team "${t.name}"?`, 'All channels, conversations and files in it will be deleted for everyone. This cannot be undone.', 'Delete team', () => messaging.deleteTeam(t.id));
+
+function teamWarn(msg) {
+  const el = $('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'toast show bad';
+  clearTimeout(toastErr._t);
+  toastErr._t = setTimeout(() => (el.className = 'toast'), 4000);
+}

@@ -119,11 +119,15 @@ ARCHITECTURE §6bl; VP9 at quantizer 32 (camera) / 24 (screen) in `wsmedia.js` (
 
 ARCHITECTURE §6bn (a WebGL compositor built, measured as no gain, removed; §6bk's cost table corrected; `tools/e2e/measure-fx-cost.mjs`) and §6bo (Together mode: `OpTogether` 0x128, `room/together.go`, `signal/together.go`, `web/src/together.js`, scene in `app.js`, `tools/e2e/together.e2e.mjs`). The effects and Together harnesses use a drawn head-and-shoulders camera the segmenter recognises.
 
+## Batch 16 — done: teams as containers above channels
+
+ARCHITECTURE §6bp; migrations 0060-0066, `messaging/teams.go` + `teams_handler.go` + `teams_test.go`, team rules in `channels.go`, Teams surface in `chat.js` (`renderTeamsSurface`), rail button in `index.html`, `tools/e2e/teams.e2e.mjs`, Teams screens in the layout harness.
+
 ## Next, in order
 
-1. Beyond meetings: teams as containers above channels, an activity feed, calendar views with a scheduling assistant.
+1. Beyond meetings: an activity feed, calendar views with a scheduling assistant.
 2. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
-2. Beyond meetings: teams as containers above channels, activity feed, calendar views + scheduling assistant, remaining chat items (see TEAMS_PARITY "Not built" rows).
+3. Remaining chat items (see TEAMS_PARITY "Not built" rows).
 
 ## How to run things
 

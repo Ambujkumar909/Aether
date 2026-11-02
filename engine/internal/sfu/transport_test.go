@@ -31,6 +31,7 @@ import (
 // the suite failed now and then with "access permissions" on the rebind.
 func freePort(t *testing.T) int {
 	t.Helper()
+	var last error
 	for range 20 {
 		l, err := net.Listen("tcp4", "0.0.0.0:0")
 		if err != nil {
@@ -39,12 +40,13 @@ func freePort(t *testing.T) int {
 		port := l.Addr().(*net.TCPAddr).Port
 		u, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", port))
 		l.Close()
+		last = err
 		if err == nil {
 			u.Close()
 			return port
 		}
 	}
-	t.Fatal("no port free for both UDP and TCP")
+	t.Fatalf("no port free for both UDP and TCP: %v", last)
 	return 0
 }
 

@@ -32,6 +32,7 @@ import {
 import {
   connectChatSocket,
   renderChatSurface,
+  renderTeamsSurface,
   refresh as refreshChat,
   frequentContacts,
   directWith,
@@ -7427,6 +7428,7 @@ function wireHome() {
         .forEach((x) => x.classList.toggle('active', x === b));
       if (state.homeTab === 'calendar') renderCalendar();
       else if (state.homeTab === 'chat') renderChatSurface();
+      else if (state.homeTab === 'teams') renderTeamsSurface();
       else renderHome();
     };
   });

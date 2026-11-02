@@ -4686,3 +4686,92 @@ Outline and video travel separately and can be a frame apart while someone
 moves. There is no spatial audio yet, which Teams pairs with this view.
 Only the organizer's "for everyone" mode exists; Teams' "only for you"
 would need outlines from people who have not chosen it.
+
+### 6bp. Teams: containers above channels
+
+Teams' words, from its package: "Your teams", "Join or create a team",
+"Create team", "Give your team a name", "Private - Only team owners can add
+members", "Public - Anyone in your organization can join", "Join a team with
+a code", "Generate team code", "Team code", "Manage team", "Owners",
+"Members and guests", "Add member", "Leave team", "Delete team", "Create a
+channel", "Standard — Everyone on the team has access", "Private - Only for
+people added", "Channel name is already taken.", "Either the team has been
+deleted or you are not a member."
+
+**The model** (`messaging/teams.go`, tables 0060-0066):
+
+- A team has owners and members, and is public or private.
+- Every team has a General channel. It cannot be deleted or renamed, and it
+  is listed first.
+- Joining a team puts you in General and every standard channel. Leaving
+  takes you out of all of its channels, private ones included.
+- A private channel's members are chosen by its members, and must be on the
+  team.
+- A standard channel's membership *follows the team*: it cannot be joined,
+  left or added to directly, and is refused with Teams' "Everyone on the
+  team has access."
+- Channel names are unique within their team. The old index, unique across
+  the organisation, is replaced by one on (team, name); organisation-wide
+  channels keep team '' and stay unique among themselves.
+- Team channels are ordinary channels underneath: the same messages,
+  threads, pushes, files and unread counts. Nothing in the message path
+  changed.
+
+**Who sees and does what.**
+
+- A public team can be browsed (by name prefix) and joined by anybody who
+  could message its creator. That is the organisation rule channels already
+  use, so an outsider never sees a company's teams.
+- A private team is invisible to non-members. You get in when an owner adds
+  you, or with its code: seven characters from an alphabet without
+  look-alikes, generated, reset or removed by owners, and shown only to
+  owners.
+- Code guesses are limited to ten a minute per account. With 31⁷ codes, a
+  guess is hopeless.
+- Owners add people, change roles, edit the team, and delete it (every
+  channel and file goes with it). A team always keeps an owner: the last
+  one cannot step down or leave while others remain.
+
+**Bounds**, each tested one over: an 80-character name, a 1,024-character
+description, 200 channels a team, and 5,000 members, counted inside the
+insert so the bound holds atomically.
+
+**Speed (rule 7).** Your teams list, with every team's visible channels, is
+two queries whatever the number of teams. Every lookup is index-backed:
+your teams by (user, team), public teams by (visibility, name), channels by
+(team, kind), and codes by a unique partial index. All of these are checked
+with EXPLAIN in `teams_test.go`.
+
+**Measured.** The list is JSON over HTTP, gzipped by the server. Each
+channel adds about 73 B to it, or about 29 B gzipped: 3,665 B (1,297 B
+gzipped) for one account with several teams and 20 channels in one. It is
+fetched when the Teams view opens; message pushes for team channels are the
+ordinary message pushes.
+
+**The interface.** Teams is in the rail (the bottom bar on a phone). Your
+teams list down the left, folding to their channels, with private ones
+marked by a lock and unread counts. A channel opens on the right as the
+same thread as any chat, headed "Team › Channel". A team's "…" menu has
+Manage team, Add channel, Add member, Team code, Edit team, Leave team and
+Delete team, each shown only to those who may use it.
+
+Tests:
+
+- `messaging/teams_test.go`: creation; General; browsing with the
+  organisation rule; joining public and refusing private; codes (wrong,
+  case and spaces, removed, shown only to owners); standard channels
+  following the team; private channels taking only team members; leaving
+  through every channel; the last owner; roles; deletion; bounds one over;
+  index plans. 13 mutations, each caught; one survivor showed that "joining
+  never adds you to a private channel" was untested, and now it is.
+- `tools/e2e/teams.e2e.mjs`: three browsers. It covers create, find and
+  join, the channels you see, a post arriving unread and opening, the
+  private team and its code, leaving and deleting, and the stranger,
+  anonymous and CSRF cases plus the name bound. It fails when private
+  channels are listed for everyone.
+- Layout harness: the Teams list, a channel, and the join-or-create and
+  create dialogs, at every width.
+
+Not built: guests, shared channels, team pictures, archiving, tabs and apps
+inside a channel, and member requests in private teams. Those are Teams'
+enterprise layer.
