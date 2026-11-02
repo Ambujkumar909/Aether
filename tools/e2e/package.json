@@ -1,0 +1,14 @@
+{
+  "name": "aether-e2e",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end harnesses: messaging over the real wire, and layout at phone, tablet and desktop widths in the installed Chrome.",
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  },
+  "scripts": {
+    "messaging": "node messaging.e2e.mjs",
+    "layout": "node layout.e2e.mjs",
+    "test": "node messaging.e2e.mjs && node layout.e2e.mjs"
+  }
+}

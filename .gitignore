@@ -1,0 +1,21 @@
+# Secrets and live data: never pushed.
+*.pem
+*.pem.*
+*.key
+.env*
+*.db
+*.db-*
+engine/files/
+tools/e2e/.accounts.json
+
+# Builds, logs, scratch.
+*.exe
+*.exe~
+*.log
+.probe/
+node_modules/
+tools/e2e/.shots/
+graphify-out/
+
+# Personal screenshots in the project root.
+/Screenshot *.png

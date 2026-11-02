@@ -1,0 +1,13 @@
+{
+  "name": "aether-web",
+  "private": true,
+  "type": "module",
+  "description": "Aether web client. No build step and no runtime dependencies: the browser loads the ES modules directly.",
+  "scripts": {
+    "test": "node --test src/permissions.test.mjs src/transport.test.mjs src/opus.test.mjs src/opcodes.test.mjs src/rtc.test.mjs src/meeting.test.mjs src/roster.test.mjs src/peoplesearch.test.mjs src/emoji.test.mjs src/avatar.test.mjs src/captions.test.mjs src/thread.test.mjs src/titlebar.test.mjs src/when.test.mjs src/format.test.mjs src/receipts.test.mjs src/presence.test.mjs src/idle.test.mjs src/typing.test.mjs src/echo.test.mjs src/jitter.test.mjs src/mediaframe.test.mjs src/denoise.test.mjs src/icequeue.test.mjs src/leveler.test.mjs src/codecs.test.mjs src/spotlight.test.mjs src/gallery.test.mjs src/breakout.test.mjs src/health.test.mjs src/whiteboard.test.mjs src/recording.test.mjs",
+    "interop": "node src/interop.test.mjs"
+  },
+  "devDependencies": {
+    "ws": "^8.18.0"
+  }
+}

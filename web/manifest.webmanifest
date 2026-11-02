@@ -1,0 +1,18 @@
+{
+  "name": "Aether",
+  "short_name": "Aether",
+  "description": "Meetings, measured to the bit.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07080d",
+  "theme_color": "#2ee6a8",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

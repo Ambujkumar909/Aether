@@ -1,0 +1,6 @@
+{
+  "name": "aether-tools",
+  "private": true,
+  "type": "module",
+  "description": "Measurement tooling. bitcheck captures real packets and audits the bit ledger against them."
+}
