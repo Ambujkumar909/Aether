@@ -36,4 +36,3 @@ func benchSend(b *testing.B, members int) {
 		}
 	}
 }
-

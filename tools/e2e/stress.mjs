@@ -39,7 +39,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Reader, Writer, Op, newDictPair, splitBatch, encodeState, decodeState, decodeRoster, decodeWelcome, decodeSpeakers, decodeSDP, decodeICE, decodeMediaFrame } from '../../web/src/wire.js';
+import { Reader, Writer, Op, newDictPair, splitBatch, encodeState, decodeState, decodeRoster, decodeWelcome, decodeSpeakers, decodeSDP, decodeICE, decodeMediaFrame, encodeMediaFrame, encodeViewport } from '../../web/src/wire.js';
 import { decodeWhiteboard, encodeOpen, encodeStroke, W, TOOL } from '../../web/src/whiteboard.js';
 import { decodeBreakout } from '../../web/src/breakout.js';
 import { decodeRecording } from '../../web/src/recording.js';
@@ -55,9 +55,11 @@ const arg = (name, dflt) => {
 const N = Number(arg('n', 50));
 const MSGS = Number(arg('msgs', 10));
 const UI = process.argv.includes('--ui');
+const MEDIA = !process.argv.includes('--no-media');
+const MEDIA_SECONDS = Number(arg('media-seconds', 10));
 const KEEP = process.argv.includes('--keep');
 const PORT = 8460 + Math.floor(Math.random() * 30);
-const MEDIA = PORT + 100;
+const MEDIA_PORT = PORT + 100;
 const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -114,7 +116,7 @@ if (!exe) {
 const adminEmail = 'stress-admin@example.test';
 const adminPass = 'stress-' + randomBytes(9).toString('base64url');
 const logLines = [];
-const server = spawn(exe, ['-addr', `${HOST}:${PORT}`, '-media-port', String(MEDIA), '-relay=false', '-trust-proxy', '-db', join(dir, 'stress.db'), '-web', join(root, 'web'), '-admin-email', adminEmail, '-admin-password', adminPass], { cwd: join(root, 'engine') });
+const server = spawn(exe, ['-addr', `${HOST}:${PORT}`, '-media-port', String(MEDIA_PORT), '-relay=false', '-trust-proxy', '-db', join(dir, 'stress.db'), '-web', join(root, 'web'), '-admin-email', adminEmail, '-admin-password', adminPass], { cwd: join(root, 'engine') });
 for (const s of [server.stdout, server.stderr]) s.on('data', (d) => logLines.push(...d.toString().split('\n').filter(Boolean)));
 for (let i = 0; i < 60; i++) {
   try {
@@ -308,7 +310,7 @@ function decodeMeetingFrame(h, r) {
     case Op.Together: f.tog = decodeTogether(r); break;
     case Op.Recording: decodeRecording(r); break;
     case Op.Reaction: f.reaction = { who: r.str(), emoji: r.str() }; break;
-    case Op.MediaFrame: decodeMediaFrame(r); break;
+    case Op.MediaFrame: f.media = decodeMediaFrame(r); break;
     case Op.Sdp: decodeSDP(r); break;
     case Op.Ice: decodeICE(r); break;
     default: break; // EndMeeting, Remove, MuteAll, LowerHands: no body
@@ -536,6 +538,7 @@ try {
       if (f.wb && f.wb.kind === 'state') p.m.board = f.wb;
       if (f.tog?.kind === 'state') p.m.togOn = f.tog.on;
       if (f.tog?.kind === 'mask') p.m.masks++;
+      if (f.media && p.m.onMedia) p.m.onMedia(f.media);
     });
   };
   await joinOne(people[0]);
@@ -630,6 +633,139 @@ try {
   host.ms.send((w) => { w.header(Op.Whiteboard); w.bits(W.close, 3); w.bits(0, 5); });
   await until(() => people.every((p) => !p.m.togOn), 10000);
   await end();
+
+
+  // ---- media --------------------------------------------------------------
+  // Audio, cameras and a screen share over the socket media path, from every
+  // person at once, with synthetic payloads the size real encoders produce
+  // (audio: 120 B every 20 ms at 48 kbit/s; a still camera at constant
+  // quality: about 600 B a frame at 15 fps with an 8 KB key frame every 2 s,
+  // ARCHITECTURE 6bl; a screen: 4 KB at 5 fps with a 60 KB key frame every
+  // 5 s). Each payload starts with who sent it, its sequence number and when.
+  if (MEDIA) {
+    await begin('media');
+    const KIND_AUDIO = 0, KIND_CAM = 1, KIND_SCREEN = 2;
+    const stamp = (size, sender, kind, seq) => {
+      const b = Buffer.alloc(Math.max(16, size));
+      b.writeUInt16BE(sender, 0);
+      b.writeUInt8(kind, 2);
+      b.writeUInt32BE(seq, 3);
+      b.writeDoubleBE(now(), 7);
+      return new Uint8Array(b);
+    };
+    for (const p of people) {
+      p.media = { got: new Map(), lat: { [KIND_AUDIO]: [], [KIND_CAM]: [], [KIND_SCREEN]: [] }, bytes0: p.ms.rxBytes };
+      p.m.onMedia = (f) => {
+        const b = Buffer.from(f.payload);
+        if (b.length < 15) return;
+        const sender = b.readUInt16BE(0), kind = b.readUInt8(2), seq = b.readUInt32BE(3), t = b.readDoubleBE(7);
+        const key = `${sender}:${kind}`;
+        const g = p.media.got.get(key) ?? { n: 0, last: -1, gaps: 0, dupes: 0 };
+        if (seq <= g.last) g.dupes++;
+        else if (g.last >= 0 && seq !== g.last + 1) g.gaps += seq - g.last - 1;
+        g.last = Math.max(g.last, seq);
+        g.n++;
+        p.media.got.set(key, g);
+        if ((seq & 3) === 0) p.media.lat[kind].push(now() - t);
+      };
+    }
+    // Each person's gallery shows nine others, as a browser's does, and says
+    // so (by participant id, as app.js reportViewport does): cameras go only
+    // to those showing them. Spread so every camera is on somebody's screen.
+    const SHOWN = Math.min(9, N - 1);
+    for (const p of people) {
+      p.shows = new Set(Array.from({ length: SHOWN }, (_, k) => people[(p.i + 1 + k) % N].i));
+      p.ms.send((w) => encodeViewport(w, people.filter((q) => q !== p).map((q) => ({ track: q.m.id, width: 320, height: 180, visible: p.shows.has(q.i), pinned: false }))));
+    }
+    await sleep(800);
+    const talkers = people.slice(0, 3);
+    const presenter = people[1];
+    const sent = new Map();
+    const bump = (k) => sent.set(k, (sent.get(k) ?? 0) + 1);
+    const timers = [];
+    const tMedia = now();
+    const cpu0 = await sample();
+    // Audio: 50 a second from each talker.
+    timers.push(setInterval(() => {
+      for (const p of talkers) {
+        const k = `${p.i}:${KIND_AUDIO}`;
+        p.ms.send((w) => encodeMediaFrame(w, { kind: 0, key: false, ts: 0, payload: stamp(120, p.i, KIND_AUDIO, sent.get(k) ?? 0) }));
+        bump(k);
+      }
+    }, 20));
+    // Cameras: everyone, 15 a second, staggered so they do not all fire together.
+    people.forEach((p, idx) => {
+      setTimeout(() => timers.push(setInterval(() => {
+        const k = `${p.i}:${KIND_CAM}`;
+        const seq = sent.get(k) ?? 0;
+        const key = seq % 30 === 0;
+        p.ms.send((w) => encodeMediaFrame(w, { kind: 1, key, ts: Math.round(now()), payload: stamp(key ? 8000 : 600, p.i, KIND_CAM, seq), vp9: true }));
+        bump(k);
+      }, 66)), (idx * 66) / N);
+    });
+    // One screen: 5 a second.
+    timers.push(setInterval(() => {
+      const k = `${presenter.i}:${KIND_SCREEN}`;
+      const seq = sent.get(k) ?? 0;
+      const key = seq % 25 === 0;
+      presenter.ms.send((w) => encodeMediaFrame(w, { kind: 1, key, ts: Math.round(now()), payload: stamp(key ? 60000 : 4000, presenter.i, KIND_SCREEN, seq), screen: true, vp9: true }));
+      bump(k);
+    }, 200));
+    await sleep(MEDIA_SECONDS * 1000);
+    for (const t of timers) clearInterval(t);
+    await sleep(1500); // the last frames land
+    const secs = (now() - tMedia) / 1000;
+    const cpu1 = await sample();
+    metric('server cpu during media (cores busy)', cpu0 && cpu1 ? (cpu1.cpuS - cpu0.cpuS) / secs : NaN);
+    let lost = 0, dupes = 0, expected = 0, received = 0, unseen = 0;
+    for (const p of people) {
+      for (const [k, n] of sent) {
+        const [sender, kind] = k.split(':').map(Number);
+        if (sender === p.i) continue; // nobody is sent their own
+        const g = p.media.got.get(k);
+        if (kind === KIND_CAM && !p.shows.has(sender)) {
+          unseen += g?.n ?? 0; // a camera this person is not showing
+          continue;
+        }
+        expected += n;
+        received += g?.n ?? 0;
+        // The first frames after the viewport report can predate it; count
+        // what is missing after the first second's worth.
+        lost += Math.max(0, n - (g?.n ?? 0));
+        dupes += g?.dupes ?? 0;
+      }
+    }
+    ok(unseen === 0, `nobody was sent a camera they are not showing (${unseen} frames)`);
+    metric('media frames sent / expected at receivers / received', { sent: [...sent.values()].reduce((a, b) => a + b, 0), expected, received });
+    ok(lost === 0, `every audio, camera and screen frame reached every other person (${lost} missing of ${expected})`);
+    ok(dupes === 0, `none twice (${dupes})`);
+    for (const [kind, name] of [[KIND_AUDIO, 'audio'], [KIND_CAM, 'camera'], [KIND_SCREEN, 'screen']]) {
+      metric(`${name} latency ms, sender to receiver`, dist(people.flatMap((p) => p.media.lat[kind])));
+    }
+    const rxRate = people.map((p) => ((p.ms.rxBytes - p.media.bytes0) * 8) / secs / 1e6);
+    metric('received per person, Mbit/s', dist(rxRate));
+    metric('server out, all people, Mbit/s', rxRate.reduce((a, b) => a + b, 0));
+    ok(people.every((p) => !p.ms.closed), `nobody was dropped (${people.filter((p) => p.ms.closed).length} disconnected)`);
+
+    // One person floods: 400 frames of 60 KB as fast as the socket takes them.
+    const flooder2 = people[N - 2];
+    const before = people.map((p) => p.ms.closed);
+    for (const p of people) p.media.got.clear();
+    const fb0 = people[0].ms.rxBytes;
+    // As audio: audio goes to everyone, so this is the widest a flood can go.
+    const memBefore = await sample();
+    for (let k = 0; k < 400; k++) flooder2.ms.send((w) => encodeMediaFrame(w, { kind: 0, key: false, ts: 0, payload: stamp(60000, flooder2.i, KIND_AUDIO, k) }));
+    await sleep(4000);
+    const memAfter = await sample();
+    metric('flood: server memory before / after (MB)', [memBefore?.mb, memAfter?.mb]);
+    const knocked = people.filter((p, i) => !before[i] && p !== flooder2 && p.ms.closed).length;
+    const relayedMB = (people[0].ms.rxBytes - fb0) / 1e6;
+    metric('flood: 24 MB sent by one person; MB that reached each other person', relayedMB);
+    metric('flood: people disconnected by it', knocked);
+    ok(knocked === 0, `one person's media flood does not knock anybody else out of the meeting (${knocked} disconnected)`);
+    ok(relayedMB < 8, `and what reaches each other person is the allowance (6 MB burst), not the flood: ${relayedMB.toFixed(1)} MB`);
+    await end();
+  }
 
   // ---- the UI at N --------------------------------------------------------
   if (UI) {

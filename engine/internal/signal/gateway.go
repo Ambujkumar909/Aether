@@ -656,11 +656,11 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 				what = "share"
 			}
 		}
-		if !rm.May(p.ID, what) {
+		if !rm.May(p.ID, what) || !rm.AllowedN(p.ID, room.AllowMedia, float64(len(payload)), time.Now()) {
 			return nil
 		}
 		body := append([]byte(nil), payload...)
-		g.announce(rm, p.ID, func(w *wire.Writer) {
+		enc := func(w *wire.Writer) {
 			w.WriteHeader(wire.OpMediaFrame, 0, false)
 			w.Str(p.ID)
 			w.Bits(kind, 1)
@@ -670,7 +670,28 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 				w.Uvarint(ts)
 			}
 			w.Raw(body)
-		})
+		}
+		// A camera only to those with it on screen (room/sockview.go);
+		// audio and a screen to everyone. A receiver that is behind has the
+		// frame dropped, not the meeting (Conn.EmitMedia), and the publisher
+		// is asked for a key frame to recover from.
+		audience := rm.CameraAudience(p.ID)
+		if what != "camera" {
+			audience = audience[:0]
+			for _, q := range rm.Snapshot() {
+				if q.ID != p.ID {
+					audience = append(audience, q)
+				}
+			}
+		}
+		size := len(body) + 32
+		for _, q := range audience {
+			if qc := g.connFor(q.ID); qc != nil && q.Send != nil {
+				if qc.EmitMedia(p.ID, kind == 1, key == 1, size, enc) {
+					g.forwardKeyframeReq(rm, q.ID, p.ID)
+				}
+			}
+		}
 
 	case wire.OpMuteAll:
 		if err := r.Err(); err != nil {
@@ -964,9 +985,19 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		if err := m.Decode(r); err != nil {
 			return err
 		}
+		views := make(map[string]bool, len(m.Tiles))
 		for _, t := range m.Tiles {
-			router.SetViewport(p.ID, t.Track,
-				int(t.Width), int(t.Height), t.Visible, t.Pinned)
+			if router != nil {
+				router.SetViewport(p.ID, t.Track,
+					int(t.Width), int(t.Height), t.Visible, t.Pinned)
+			}
+			views[t.Track] = views[t.Track] || t.Visible
+		}
+		// The same report names people for the socket path: their cameras
+		// are sent only while on screen, and one that comes into view is
+		// asked for a key frame to start from.
+		for _, pub := range rm.SetSocketView(p.ID, views) {
+			g.forwardKeyframeReq(rm, p.ID, pub)
 		}
 
 	case wire.OpKeyframeReq:

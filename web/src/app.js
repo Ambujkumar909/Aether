@@ -2292,6 +2292,31 @@ function reportViewport(force = false) {
       pinned: state.pinned === tileId,
     });
   }
+  // Each person's tile, by participant id: on the socket media path the
+  // server sends a camera only to those who have it on screen (the track ids
+  // above are this browser's own there, unknown to the server). The same
+  // on-screen rule as for tracks.
+  for (const p of participants()) {
+    if (p.self || p.presentation || p.id === state.me) continue;
+    let el = document.querySelector(`.strip-tile[data-id="${CSS.escape(p.id)}"]`);
+    if (!el && (stageOwner === p.id || featuredNow?.id === p.id)) el = stageEl;
+    const rect = el?.getBoundingClientRect();
+    const onScreen =
+      !!rect &&
+      !(document.hidden && !pipActive()) &&
+      rect.bottom > 0 &&
+      rect.top < window.innerHeight &&
+      rect.right > 0 &&
+      rect.left < window.innerWidth &&
+      rect.width > 0;
+    tiles.push({
+      track: p.id,
+      width: onScreen ? Math.round(rect.width * dpr) : 0,
+      height: onScreen ? Math.round(rect.height * dpr) : 0,
+      visible: onScreen,
+      pinned: state.pinned === p.id,
+    });
+  }
   if (!tiles.length) return;
 
   // Only report on change. A resize observer that fires sixty times a second

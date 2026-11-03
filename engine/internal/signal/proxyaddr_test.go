@@ -40,7 +40,10 @@ func TestSameDeviceUsesTheForwardedAddressBehindAProxy(t *testing.T) {
 			g.Origin = []string{"*"}
 			g.TrustProxy = tc.trust
 			// Signed in, so the room admits them rather than holding them in the lobby.
-			g.Identify = func(r *http.Request) (string, string) { u := r.Header.Get("X-Test-User"); return u, u + "@example.test" }
+			g.Identify = func(r *http.Request) (string, string) {
+				u := r.Header.Get("X-Test-User")
+				return u, u + "@example.test"
+			}
 			srv := httptest.NewServer(g)
 			t.Cleanup(srv.Close)
 			url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/rtc?room=proxy-" + fmt.Sprint(i) + "&name=x"

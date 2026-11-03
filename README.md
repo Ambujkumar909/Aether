@@ -174,7 +174,10 @@ meeting (hands, reactions, whiteboard, Together mode, floods) at once. At 200 pe
 everyone leaves, the server is back to 17 goroutines, with no rooms or media routes left. The run
 found five defects, fixed them, and also found a limit not yet fixed: a 5,000-member channel
 costs 26 ms a message to write. All of it is in
-[ARCHITECTURE §6br](docs/ARCHITECTURE.md).
+[ARCHITECTURE §6br](docs/ARCHITECTURE.md). The same run with audio, every camera and a screen
+share from 50 people delivered 108,961 of 108,961 frames at p99 under 20 ms, and sends each person
+only the cameras on their screen: 1.0 Mbit/s each instead of 4.1
+([§6bs](docs/ARCHITECTURE.md)).
 
 **Coalescing, not just encoding, is what makes a connection dense.** At one frame per message,
 60 bytes of IP and TCP ride on every tiny payload, and only 27.1% of the bytes are application

@@ -39,6 +39,10 @@ type Participant struct {
 	// (Allowed). They go when the person does.
 	allowances [numAllowances]capBucket
 
+	// sockView: the socket-path cameras this person has on screen
+	// (sockview.go); nil until they first say.
+	sockView map[string]bool
+
 	// Meter is this participant's byte ledger, a child of the room meter.
 	Meter *ledger.Meter
 

@@ -21,9 +21,16 @@ func TestAllowances(t *testing.T) {
 	t0 := time.Unix(1_800_000_000, 0)
 	for a := Allowance(0); a < numAllowances; a++ {
 		burst := int(a.Burst())
-		for i := range burst {
-			if !r.Allowed("p", a, t0) {
-				t.Fatalf("kind %d: refused at %d of a burst of %d", a, i, burst)
+		if burst > 1000 {
+			// Media is counted in bytes: the burst in one go.
+			if !r.AllowedN("p", a, a.Burst(), t0) {
+				t.Fatalf("kind %d: a burst of %d refused", a, burst)
+			}
+		} else {
+			for i := range burst {
+				if !r.Allowed("p", a, t0) {
+					t.Fatalf("kind %d: refused at %d of a burst of %d", a, i, burst)
+				}
 			}
 		}
 		if r.Allowed("p", a, t0) {

@@ -4973,3 +4973,74 @@ The fix is to count unread from the message index at read time for large convers
 At 50, `--ui`: the gallery, the People panel (all 51) and Together mode at phone (390×844) and desktop (1280×800). Nothing leaves the screen, and the browser is not told it shares a device. Screenshots were looked at: the upright Together scene seats 51 in rows of five with readable names.
 
 **Not covered by this harness:** media. The clients carry signalling only, not 50 encoders. The socket media path at scale needs real encoders, and is measured in §6bl and §6bm with a few browsers.
+
+### 6bs. Media under stress: audio, cameras and a screen, 50 people at once
+
+The stress harness (§6br) gained a media phase. It runs over the socket media path, the fallback where neither UDP nor a relay works, which is also the path that runs entirely through the meeting server.
+
+Every person runs the browser's own frame encoder (`encodeMediaFrame`) with synthetic payloads of the size real encoders produce:
+
+- **Audio:** 120 B every 20 ms (48 kbit/s Opus), from three people talking.
+- **Cameras:** every camera on, at 15 fps: about 600 B per frame, with an 8 KB key frame every 2 s. That is a still camera at constant quality, §6bl.
+- **One screen share:** 5 fps, 4 KB per frame, with a 60 KB key frame every 5 s.
+
+Each payload starts with who sent it, its sequence number and when, so every receiver counts loss and duplicates per sender and kind, and measures latency.
+
+It runs for 10 s. Then one person floods: 400 frames of 60 KB, as fast as the socket takes them.
+
+**The first run, before the fixes (50 people):**
+
+- All 369,901 frames arrived, none twice. Latency was p50 16 ms for every kind, of which 15 ms is the socket's coalescing window.
+- **Every camera went to everyone.** Each person was sent all 49 cameras, 4.13 Mbit/s, though a gallery shows about ten: 206 Mbit/s out of the server, about four fifths of it never drawn.
+
+  The WebRTC path has followed each viewer's viewport from the start; the socket path relayed everything. On a phone with a weak link, that much data falls behind, and falling behind closed the connection: the person left the meeting.
+- **A flood cost the server memory.** One person's 24 MB reached each of the other 49 as 13.9 MB, and the server grew to 2 GB.
+
+  The cause: each connection's queue was bounded in frames (1,024), not in bytes, and every receiver held its own copy of each frame. 1,024 screen-sized frames is 61 MB per receiver.
+
+**Fixed, each with a test that fails without it:**
+
+1. **Cameras follow the viewport** (`room/sockview.go`, `app.js` `reportViewport`).
+
+   - The browser's viewport report now also names each person's tile by participant id. On the socket path its track ids are local, unknown to the server.
+   - The server keeps, for each viewer, which socket cameras are on screen, and sends a camera only to those showing it.
+   - A camera that comes into view prompts a key-frame request to its publisher, so the picture starts at once.
+   - Audio and screens still go to everyone.
+   - A viewer that has never reported is sent everything, so an older client keeps working.
+2. **A receiver that falls behind loses frames, not the meeting** (`Conn.EmitMedia`).
+
+   - The queue now has a 2 MB budget for media. Past it, frames for that receiver are dropped whole, before they are encoded, so its dictionary is untouched.
+   - Video from a publisher stays dropped until that publisher's next key frame. A decoder never sees a delta whose reference it missed, so the picture freezes briefly rather than smearing (rule 3).
+   - The first dropped frame of a gap asks for a key frame, and so does a dropped key frame.
+   - Audio is dropped frame by frame; Opus conceals a gap.
+   - The connection stays up.
+
+   A mutation survivor improved this rule: the first version did not ask again when the key frame itself was dropped, so it waited out the publisher's 2 s cadence.
+3. **One sender's media has a byte allowance:** 25 Mbit/s sustained with a 6 MB burst (`room.AllowMedia`). That is far above any encoder: a still camera at constant quality is 49–81 kbit/s, and a 4K screen's key frame a few hundred KB. So it is not a quality ceiling; it stops one client multiplying junk by the room's size.
+
+**The same run after (50 people; each person showing nine others, spread so that every camera is on somebody's screen):**
+
+| | Before | After |
+|---|---|---|
+| Received per person | 4.13 Mbit/s | **1.00 Mbit/s** |
+| Out of the server, all people | 206 Mbit/s | **49.7 Mbit/s** |
+| Camera frames sent to someone not showing them | all | **0** |
+| Frames that should arrive / did | 369,901 / 369,901 | 108,961 / 108,961 |
+| Latency p50 / p99, audio | 15.9 / 32.4 ms | 15.7 / 19.1 ms |
+| Latency p50 / p99, camera | 16.8 / 44.7 ms | 15.6 / 18.7 ms |
+| Latency p50 / p99, screen | 16.2 / 23.4 ms | 16.0 / 21.3 ms |
+| Flood of 24 MB as audio: reaching each other person | 13.9 MB (as video) | **5.3 MB**, the allowance |
+| Flood: server memory | 2,019 MB | **352 MB** |
+| Anyone disconnected | 0 | 0 |
+
+The p50 of about 16 ms is almost all the socket's 15 ms coalescing window. That window is the price of one TCP segment per burst instead of one per frame (§6bq). For the fallback path the trade stands, and it is stated here so it can be revisited with numbers.
+
+**Real browsers, WebRTC:** `tools/e2e/load.e2e.mjs` runs five headless browsers on this laptop for 120 s, each with a fake camera and microphone. Every receiver decoded video from all four others in every 10 s sample, received audio from all four, and concealed 0.00% of its audio.
+
+It reported 4 video freezes and a lowest frame rate of 13 fps, so two of its checks failed. The previous server build, run the same way, gave 6 freezes and 14 fps. That is five software VP9 encoders and decoders sharing one machine, not the server.
+
+The harness's server CPU and memory columns read 0: its process sampling does not find the server. That is a harness defect, to fix.
+
+Every socket-media harness passes against the new server: video, share, audio, mute, spotlight, controls, call and health.
+
+**Not covered yet:** media at 50 over WebRTC needs fifty encoders. Simulating RTP senders, rather than browsers, is the way to measure the SFU's allocator at that scale.

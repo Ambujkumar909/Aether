@@ -34,6 +34,14 @@ const CoalesceWindow = 15 * time.Millisecond
 // correct response is to disconnect it rather than to grow memory.
 const MaxQueuedFrames = 1024
 
+// MaxQueuedMediaBytes bounds the queue in bytes for media. A count of frames
+// alone let 1,024 screen-sized frames (60 KB each) sit queued for one slow
+// receiver, and in the 50-person stress run one sender's 24 MB burst took the
+// server to 2 GB (ARCHITECTURE 6bs). Media past this is dropped, whole, for
+// that receiver only; the connection stays up. 2 MB is seconds of any real
+// meeting's media and holds the largest key frame several times over.
+const MaxQueuedMediaBytes = 2 << 20
+
 // Conn is one participant's control channel.
 type Conn struct {
 	ws    *websocket.Conn
@@ -46,6 +54,9 @@ type Conn struct {
 
 	mu          sync.Mutex
 	pending     [][]byte
+	pendingB    int             // bytes in pending
+	behind      map[string]bool // publishers whose video is dropped until a key frame
+	mediaDrops  int             // media frames dropped for this receiver
 	timer       *time.Timer
 	closed      bool
 	closeReason string
@@ -134,10 +145,66 @@ func (c *Conn) Emit(fn func(w *wire.Writer)) {
 	copy(frame, b)
 
 	c.pending = append(c.pending, frame)
+	c.pendingB += len(frame)
 	if c.timer == nil {
 		c.timer = time.AfterFunc(CoalesceWindow, c.flush)
 	}
 	c.mu.Unlock()
+}
+
+// EmitMedia queues a media frame unless this receiver is behind, in which
+// case the frame is dropped whole, before it is encoded (so the dictionary is
+// untouched). Video from a publisher, once dropped, stays dropped until that
+// publisher's next key frame: a decoder never sees a delta whose reference it
+// missed, so the picture freezes briefly rather than smearing. needKey says
+// a gap just started (or its key frame was lost too), so the publisher should
+// be asked for a key frame. Audio is dropped frame by frame; the decoder conceals a gap.
+func (c *Conn) EmitMedia(publisher string, video, key bool, size int, fn func(w *wire.Writer)) (needKey bool) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	if video && c.behind[publisher] && !key {
+		c.mediaDrops++
+		c.mu.Unlock()
+		return false
+	}
+	if len(c.pending) >= MaxQueuedFrames || c.pendingB+size > MaxQueuedMediaBytes {
+		c.mediaDrops++
+		// A video drop -- the first delta of a gap, or a key frame that
+		// would have ended one -- asks for a key frame. (Deltas inside a gap
+		// returned above and ask for nothing.)
+		if video {
+			if c.behind == nil {
+				c.behind = map[string]bool{}
+			}
+			c.behind[publisher] = true
+			needKey = true
+		}
+		c.mu.Unlock()
+		return needKey
+	}
+	if video && key {
+		delete(c.behind, publisher)
+	}
+	w := wire.NewWriter(c.txDict)
+	fn(w)
+	frame := append([]byte(nil), w.Bytes()...)
+	c.pending = append(c.pending, frame)
+	c.pendingB += len(frame)
+	if c.timer == nil {
+		c.timer = time.AfterFunc(CoalesceWindow, c.flush)
+	}
+	c.mu.Unlock()
+	return false
+}
+
+// MediaDrops is how many media frames this receiver has had dropped.
+func (c *Conn) MediaDrops() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mediaDrops
 }
 
 // EmitNow encodes, queues and flushes immediately, bypassing coalescing.
@@ -159,6 +226,7 @@ func (c *Conn) Send(frame []byte) {
 		return
 	}
 	c.pending = append(c.pending, frame)
+	c.pendingB += len(frame)
 	if c.timer == nil {
 		c.timer = time.AfterFunc(CoalesceWindow, c.flush)
 	}
@@ -193,6 +261,7 @@ func (c *Conn) flush() {
 	}
 	frames := c.pending
 	c.pending = nil
+	c.pendingB = 0
 	if c.timer != nil {
 		c.timer.Stop()
 		c.timer = nil

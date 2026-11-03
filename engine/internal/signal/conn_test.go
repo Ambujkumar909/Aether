@@ -42,6 +42,9 @@ func wsPair(t *testing.T) (server, client *websocket.Conn) {
 		ts.Close()
 		t.Fatalf("dial: %v", err)
 	}
+	// A browser takes messages of any size; the library's default (32 KB)
+	// would cut off a batch of media frames.
+	cli.SetReadLimit(64 << 20)
 	var srv *websocket.Conn
 	select {
 	case srv = <-accepted:

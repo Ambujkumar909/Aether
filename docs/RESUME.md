@@ -131,9 +131,13 @@ ARCHITECTURE §6bq; migration 0067, `messaging/activity.go` (+ `activity_test.go
 
 ARCHITECTURE §6br; `tools/e2e/stress.mjs` (`--n`, `--msgs`, `--ui`, `--bin`), `tools/e2e/chatframes.mjs` (shared chat decoder). Fixes, each with a failing-first test: per-person allowances on relayed meeting frames (`room/allowance.go`), unchanged state dropped, argon2id slots min(cores, 8), media routers dropped with their rooms (`Reap(minAge, gone)`), `-trust-proxy` honoured on the meeting socket, upright Together scene + readable names, Go runtime in `/api/telemetry`. A partial index on hidden members measured 6× worse under load and was removed.
 
+## Batch 19 — done: media under stress (socket path)
+
+ARCHITECTURE §6bs; media phase in `tools/e2e/stress.mjs` (`--no-media`, `--media-seconds`). Socket cameras follow each viewer's viewport (`room/sockview.go`, participant ids in `reportViewport`), a lagging receiver drops whole frames until a key frame instead of being disconnected (`Conn.EmitMedia`, 2 MB media budget), and one sender's media has a 25 Mbit/s / 6 MB allowance. 50 people: 4.13 to 1.00 Mbit/s each, 206 to 49.7 Mbit/s out; a 24 MB flood: 2 GB to 352 MB.
+
 ## Next, in order
 
-1. Media under stress (requested: "each and every feature ... audio, video, screenshare"): many senders of audio, camera and screen through the socket media path with synthetic frames, per-receiver frames, latency, keyframe recovery, server CPU; plus real browsers on the WebRTC path.
+1. Media at 50 over WebRTC: simulated RTP senders against the SFU allocator (browsers cannot run fifty encoders). Fix `load.e2e.mjs`'s server CPU/memory sampling (reads 0).
 2. Large conversations: count unread from the message index at read time instead of an O(members) counter write per message (§6br: 25.8 ms a send at 5,000 members, single SQLite writer).
 3. Calendar views with a scheduling assistant.
 4. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
