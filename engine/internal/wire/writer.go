@@ -38,6 +38,9 @@ func (w *Writer) Bytes() []byte {
 
 // Len is the current encoded size in bytes, counting a partial bit
 // accumulator as a full byte. Used by the ledger for exact accounting.
+// Cap is the capacity of the buffer, for a caller deciding whether to keep it.
+func (w *Writer) Cap() int { return cap(w.buf) }
+
 func (w *Writer) Len() int {
 	n := len(w.buf)
 	if w.nbit > 0 {

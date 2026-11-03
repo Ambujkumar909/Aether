@@ -54,7 +54,8 @@ type Conn struct {
 
 	mu          sync.Mutex
 	pending     [][]byte
-	pendingB    int             // bytes in pending
+	tails       [][]byte        // pending[i]'s shared payload, if any (EmitMedia)
+	pendingB    int             // bytes in pending, tails included
 	behind      map[string]bool // publishers whose video is dropped until a key frame
 	mediaDrops  int             // media frames dropped for this receiver
 	timer       *time.Timer
@@ -145,6 +146,7 @@ func (c *Conn) Emit(fn func(w *wire.Writer)) {
 	copy(frame, b)
 
 	c.pending = append(c.pending, frame)
+	c.tails = append(c.tails, nil)
 	c.pendingB += len(frame)
 	if c.timer == nil {
 		c.timer = time.AfterFunc(CoalesceWindow, c.flush)
@@ -159,7 +161,11 @@ func (c *Conn) Emit(fn func(w *wire.Writer)) {
 // missed, so the picture freezes briefly rather than smearing. needKey says
 // a gap just started (or its key frame was lost too), so the publisher should
 // be asked for a key frame. Audio is dropped frame by frame; the decoder conceals a gap.
-func (c *Conn) EmitMedia(publisher string, video, key bool, size int, fn func(w *wire.Writer)) (needKey bool) {
+//
+// fn writes the frame's header; payload follows it on the wire and is not
+// copied: the same slice serves every receiver, so it must not change.
+func (c *Conn) EmitMedia(publisher string, video, key bool, payload []byte, fn func(w *wire.Writer)) (needKey bool) {
+	size := len(payload) + 32
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -192,7 +198,8 @@ func (c *Conn) EmitMedia(publisher string, video, key bool, size int, fn func(w 
 	fn(w)
 	frame := append([]byte(nil), w.Bytes()...)
 	c.pending = append(c.pending, frame)
-	c.pendingB += len(frame)
+	c.tails = append(c.tails, payload)
+	c.pendingB += len(frame) + len(payload)
 	if c.timer == nil {
 		c.timer = time.AfterFunc(CoalesceWindow, c.flush)
 	}
@@ -226,6 +233,7 @@ func (c *Conn) Send(frame []byte) {
 		return
 	}
 	c.pending = append(c.pending, frame)
+	c.tails = append(c.tails, nil)
 	c.pendingB += len(frame)
 	if c.timer == nil {
 		c.timer = time.AfterFunc(CoalesceWindow, c.flush)
@@ -259,8 +267,8 @@ func (c *Conn) flush() {
 		c.mu.Unlock()
 		return
 	}
-	frames := c.pending
-	c.pending = nil
+	frames, tails := c.pending, c.tails
+	c.pending, c.tails = nil, nil
 	c.pendingB = 0
 	if c.timer != nil {
 		c.timer.Stop()
@@ -269,7 +277,7 @@ func (c *Conn) flush() {
 	c.mu.Unlock()
 
 	c.scratch.Reset()
-	if err := wire.EncodeBatch(c.scratch, frames); err != nil {
+	if err := wire.EncodeBatchParts(c.scratch, frames, tails); err != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -280,7 +288,16 @@ func (c *Conn) flush() {
 	}
 	// Server to client frames are unmasked, hence masked=false.
 	c.Meter.CountSignal(c.scratch.Len(), false, len(frames))
+	// A buffer a burst grew (a screen's key frames, or a flood cut to its
+	// allowance) is let go rather than kept for the life of the connection:
+	// 200 receivers each holding 2 MB is 400 MB of nothing.
+	if c.scratch.Cap() > scratchKeep {
+		c.scratch = wire.NewWriter(nil)
+	}
 }
+
+// scratchKeep is the largest write buffer a connection keeps between flushes.
+const scratchKeep = 256 << 10
 
 // Read receives one WebSocket message and dispatches every frame it
 // contains, batched or not.

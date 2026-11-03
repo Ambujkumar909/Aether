@@ -660,6 +660,8 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 			return nil
 		}
 		body := append([]byte(nil), payload...)
+		// The header, per receiver (the publisher's id is interned in each
+		// receiver's dictionary); the payload follows it, shared.
 		enc := func(w *wire.Writer) {
 			w.WriteHeader(wire.OpMediaFrame, 0, false)
 			w.Str(p.ID)
@@ -669,7 +671,6 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 			if kind == 1 {
 				w.Uvarint(ts)
 			}
-			w.Raw(body)
 		}
 		// A camera only to those with it on screen (room/sockview.go);
 		// audio and a screen to everyone. A receiver that is behind has the
@@ -684,10 +685,9 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 				}
 			}
 		}
-		size := len(body) + 32
 		for _, q := range audience {
 			if qc := g.connFor(q.ID); qc != nil && q.Send != nil {
-				if qc.EmitMedia(p.ID, kind == 1, key == 1, size, enc) {
+				if qc.EmitMedia(p.ID, kind == 1, key == 1, body, enc) {
 					g.forwardKeyframeReq(rm, q.ID, p.ID)
 				}
 			}

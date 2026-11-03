@@ -281,19 +281,39 @@ func (r *Reader) ReadHeader() (Header, error) {
 // free -- and coalescing also cuts syscalls and wakeups, which is where the
 // server-side CPU actually goes.
 func EncodeBatch(dst *Writer, frames [][]byte) error {
-	if len(frames) == 1 {
-		dst.buf = append(dst.buf, frames[0]...)
+	return EncodeBatchParts(dst, frames, nil)
+}
+
+// EncodeBatchParts is EncodeBatch for frames in two parts: frame i is
+// heads[i] followed by tails[i] (tails may be nil, or hold nil entries). A
+// media frame's payload is the same bytes for every receiver; only the
+// header before it differs (it names the publisher in each receiver's own
+// dictionary). Kept apart, one payload serves the whole room and is copied
+// once per receiver, into that connection's reusable write buffer, instead
+// of once per receiver into a frame of its own (ARCHITECTURE 6bs).
+func EncodeBatchParts(dst *Writer, heads, tails [][]byte) error {
+	tail := func(i int) []byte {
+		if i < len(tails) {
+			return tails[i]
+		}
+		return nil
+	}
+	if len(heads) == 1 {
+		dst.buf = append(dst.buf, heads[0]...)
+		dst.buf = append(dst.buf, tail(0)...)
 		return nil
 	}
 	dst.WriteHeader(OpBatch, 0, false)
-	for _, f := range frames {
+	for i, f := range heads {
 		if len(f) > 0 && f[0]&maskVer == Version<<6 &&
 			f[0]&flagExt == 0 && Op(f[0]&maskOp) == OpBatch {
 			return ErrNestedBatch
 		}
-		dst.Uvarint(uint64(len(f)))
+		t := tail(i)
+		dst.Uvarint(uint64(len(f) + len(t)))
 		dst.align()
 		dst.buf = append(dst.buf, f...)
+		dst.buf = append(dst.buf, t...)
 	}
 	return nil
 }

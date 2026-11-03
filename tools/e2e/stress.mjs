@@ -41,8 +41,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Reader, Writer, Op, newDictPair, splitBatch, encodeState, decodeState, decodeRoster, decodeWelcome, decodeSpeakers, decodeSDP, decodeICE, decodeMediaFrame, encodeMediaFrame, encodeViewport } from '../../web/src/wire.js';
 import { decodeWhiteboard, encodeOpen, encodeStroke, W, TOOL } from '../../web/src/whiteboard.js';
-import { decodeBreakout } from '../../web/src/breakout.js';
-import { decodeRecording } from '../../web/src/recording.js';
+import { decodeBreakout, encodeSet as encodeBrSet, encodeCmd as encodeBrCmd, encodeAnnounce as encodeBrAnnounce, K as BR } from '../../web/src/breakout.js';
+import { decodeRecording, encodeSet as encodeRecSet, encodeCaption, WHAT as REC } from '../../web/src/recording.js';
 import { decodeTogether, encodeSet as encodeTogSet, encodeOutline, encodeMask } from '../../web/src/together.js';
 import { decodeChatFrame } from './chatframes.mjs';
 
@@ -299,16 +299,16 @@ function decodeMeetingFrame(h, r) {
     case Op.LobbyList: { const n = Number(r.uvarint()); for (let i = 0; i < n && i < 512 && !r.err; i++) { r.str(); r.str(); r.bool(); r.bits(7); } break; }
     case Op.Permissions: r.bits(8); break;
     case Op.MeetingPolicy: r.str(); r.bool(); r.bits(7); break;
-    case Op.Spotlight: { const n = Number(r.uvarint()); for (let i = 0; i < n && i < 512 && !r.err; i++) r.str(); break; }
+    case Op.Spotlight: { const n = Number(r.uvarint()); f.spot = []; for (let i = 0; i < n && i < 512 && !r.err; i++) f.spot.push(r.str()); break; }
     case Op.Whiteboard: f.wb = decodeWhiteboard(r); break;
-    case Op.Notes: case Op.QnA: r.blob(); break;
-    case Op.Breakout: decodeBreakout(r); break;
-    case Op.SetRole: r.str(); r.bits(8); break;
+    case Op.Notes: case Op.QnA: f.json = r.blob(); break;
+    case Op.Breakout: f.br = decodeBreakout(r); break;
+    case Op.SetRole: f.role = r.str(); r.bits(8); break;
     case Op.Block: r.str(); r.bits(8); break;
     case Op.Speakers: decodeSpeakers(r); break;
     case Op.Chat: r.str(); r.blob(); break;
     case Op.Together: f.tog = decodeTogether(r); break;
-    case Op.Recording: decodeRecording(r); break;
+    case Op.Recording: f.rec = decodeRecording(r); break;
     case Op.Reaction: f.reaction = { who: r.str(), emoji: r.str() }; break;
     case Op.MediaFrame: f.media = decodeMediaFrame(r); break;
     case Op.Sdp: decodeSDP(r); break;
@@ -517,7 +517,7 @@ try {
   const room = `stress-${tag}`;
   const tMeet = now();
   for (const p of people) {
-    p.m = { id: '', roster: new Map(), hands: new Set(), reactions: [], strokes: 0, masks: 0, togOn: false, count: new Map() };
+    p.m = { id: '', roster: new Map(), hands: new Set(), reactions: [], strokes: 0, masks: 0, togOn: false, count: new Map(), br: [], finals: 0, spot: [], roles: 0 };
   }
   // The first in hosts: join them, then everyone else at once.
   const joinOne = async (p) => {
@@ -539,6 +539,10 @@ try {
       if (f.tog?.kind === 'state') p.m.togOn = f.tog.on;
       if (f.tog?.kind === 'mask') p.m.masks++;
       if (f.media && p.m.onMedia) p.m.onMedia(f.media);
+      if (f.br) p.m.br.push(f.br);
+      if (f.rec?.kind === 'caption' && f.rec.final) p.m.finals++;
+      if (f.spot) p.m.spot = f.spot;
+      if (f.role) p.m.roles++;
     });
   };
   await joinOne(people[0]);
@@ -587,7 +591,7 @@ try {
   const late = new Person(N, `stress-${tag}-late@example.test`, 'stress-' + randomBytes(9).toString('base64url'));
   await admin.req('POST', '/api/identity/users', { email: late.email, displayName: 'Late', password: late.password, role: 'member' });
   late.id = (await late.req('POST', '/api/identity/login', { email: late.email, password: late.password })).user.id;
-  late.m = { id: '', roster: new Map(), hands: new Set(), reactions: [], strokes: 0, masks: 0, togOn: false, count: new Map() };
+  late.m = { id: '', roster: new Map(), hands: new Set(), reactions: [], strokes: 0, masks: 0, togOn: false, count: new Map(), br: [], finals: 0, spot: [], roles: 0 };
   await joinOne(late);
   const gotBoard = await until(() => late.m.board?.strokes?.length >= strokesWant, 10000);
   ok(gotBoard >= 0, `a late arrival is given the whole board: ${late.m.board?.strokes?.length ?? 0} of ${strokesWant} strokes, ${late.ms.rxBytes} B on arrival`);
@@ -766,6 +770,165 @@ try {
     ok(relayedMB < 8, `and what reaches each other person is the allowance (6 MB burst), not the flood: ${relayedMB.toFixed(1)} MB`);
     await end();
   }
+
+
+  // ---- controls: every other meeting feature, with everyone in it --------
+  await begin('controls');
+  {
+    const csrfHdr = (p) => ({ 'x-forwarded-for': p.ip, cookie: p.cookie, 'x-aether-csrf': p.jar.get('aether_csrf') ?? '' });
+    const opCount = (p, op) => p.m.count.get(op) ?? 0;
+
+    // Q&A: everyone asks at once; everyone likes the first question.
+    const q0 = people.map((p) => opCount(p, Op.QnA));
+    const tQ = now();
+    const qs = await Promise.all(people.map((p) => p.req('POST', `/api/scheduling/rooms/${room}/qna`, { body: `Question from ${p.i}?`, anonymous: false }).catch((e) => ({ err: e.status }))));
+    metric('Q&A: everyone asks at once (ms)', now() - tQ);
+    ok(qs.every((q) => q && !q.err), `${N} questions accepted (${qs.filter((q) => q?.err).length} refused)`);
+    const firstQ = qs.find((q) => q?.id)?.id;
+    await all(people.slice(1), (p) => p.req('POST', `/api/scheduling/rooms/${room}/qna/${firstQ}/like`, {}).catch(() => null));
+    const qPush = await until(() => people.every((p, i) => opCount(p, Op.QnA) - q0[i] >= N), 20000);
+    ok(qPush >= 0, `every question pushed to everyone (${Math.round(qPush)} ms)`);
+    const list = await host.req('GET', `/api/scheduling/rooms/${room}/qna`);
+    const qList = Array.isArray(list) ? list : list.questions ?? list.items ?? [];
+    const liked = qList.find((q) => q.id === firstQ);
+    ok(qList.length >= N, `the list holds all ${N} (${qList.length})`);
+    metric('Q&A: the liked question as listed', liked ? Object.fromEntries(Object.entries(liked).filter(([k]) => /like|vote|up/i.test(k))) : null);
+
+    // Meeting notes: twenty people add an item at once.
+    await host.req('POST', `/api/scheduling/rooms/${room}/notes`, {});
+    const writers = people.slice(0, Math.min(20, N));
+    await all(writers, (p) => p.req('POST', `/api/scheduling/rooms/${room}/notes/items`, { section: 'agenda', body: `Item from ${p.i}` }));
+    const notes = await host.req('GET', `/api/scheduling/rooms/${room}/notes`);
+    const items = JSON.stringify(notes).match(/Item from \d+/g) ?? [];
+    ok(new Set(items).size === writers.length, `notes: ${writers.length} items added at once, all kept (${new Set(items).size})`);
+
+    // Captions: transcription on; ten people speak at once.
+    host.ms.send((w) => encodeRecSet(w, REC.transcription, true));
+    await sleep(800);
+    // A muted speaker's words reach nobody (captions are speech).
+    for (const p of people) p.m.finals = 0;
+    people[12].ms.send((w) => encodeCaption(w, true, 1, 'said while muted'));
+    await sleep(1000);
+    ok(people.every((p) => p.m.finals === 0), `a muted speaker's caption reaches nobody (${people.reduce((a, p) => a + p.m.finals, 0)} delivered)`);
+    // Ten speakers unmute and speak at once, at the browser's pace: the
+    // whole line so far every 350 ms, then the final line.
+    const speakers = people.slice(0, Math.min(10, N));
+    for (const sp of speakers) sp.ms.send((w) => encodeState(w, { participant: sp.m.id, micMuted: false, camOff: true, sharing: false, handRaised: false, speaking: true, recording: false, role: 0 }));
+    await sleep(500);
+    const tCap = now();
+    const line = (sp) => `Speaker ${sp.i} says something useful`;
+    for (let k = 1; k <= 3; k++) {
+      for (const sp of speakers) sp.ms.send((w) => encodeCaption(w, false, 1, line(sp).slice(0, k * 10)));
+      await sleep(350);
+    }
+    for (const sp of speakers) sp.ms.send((w) => encodeCaption(w, true, 1, line(sp)));
+    const caps = await until(() => people.every((p) => p.m.finals >= speakers.length - (speakers.includes(p) ? 1 : 0)), 15000);
+    ok(caps >= 0, `captions: ${speakers.length} people speaking at once, every final line to everyone (${Math.round(now() - tCap)} ms from the first word)`);
+    host.ms.send((w) => encodeRecSet(w, REC.transcription, false));
+
+    // Host controls.
+    const target = people[3];
+    host.ms.send((w) => { w.header(Op.Spotlight); w.str(target.m.id); w.bool(true); w.bits(0, 7); });
+    const spot = await until(() => people.every((p) => p.m.spot.includes(target.m.id)), 10000);
+    ok(spot >= 0, `spotlight: everyone sees it (${Math.round(spot)} ms)`);
+    host.ms.send((w) => { w.header(Op.Spotlight); w.str(''); w.bool(false); w.bits(0, 7); });
+    await sleep(3000); // the state allowance refills after the earlier floods
+    for (const p of people) p.ms.send((w) => encodeState(w, { participant: p.m.id, micMuted: false, camOff: true, sharing: false, handRaised: true, speaking: false, recording: false, role: 0 }));
+    await until(() => people.every((p) => p.m.hands.size >= N - 1), 10000);
+    const lowerSeen = people.map((p) => opCount(p, Op.LowerHands));
+    host.ms.send((w) => w.header(Op.LowerHands));
+    const lowered = await until(() => people.slice(1).every((p, i) => opCount(p, Op.LowerHands) > lowerSeen[i + 1]), 10000);
+    ok(lowered >= 0, `lower all hands: every other person is told (${Math.round(lowered)} ms)`);
+    const muteSeen = people.map((p) => opCount(p, Op.MuteAll));
+    host.ms.send((w) => w.header(Op.MuteAll));
+    const muted = await until(() => people.slice(1).every((p, i) => opCount(p, Op.MuteAll) > muteSeen[i + 1]), 10000);
+    ok(muted >= 0, `mute all: every other person is muted (${Math.round(muted)} ms)`);
+    for (const p of people) p.m.roles = 0;
+    const promote = people.slice(5, 10);
+    for (const p of promote) host.ms.send((w) => { w.header(Op.SetRole); w.str(p.m.id); w.bits(2, 2); w.bits(0, 6); });
+    const roled = await until(() => people.every((p) => p.m.roles >= promote.length), 10000);
+    ok(roled >= 0, `${promote.length} made presenters: everyone told of each (${Math.round(roled)} ms)`);
+
+    // Breakout rooms: five, everyone but the host spread across them.
+    for (const p of people) p.m.br = [];
+    const others = people.slice(1);
+    const rooms = Math.min(5, others.length);
+    const members = Array.from({ length: rooms }, (_, k) => others.filter((_, j) => j % rooms === k).map((p) => p.m.id));
+    host.ms.send((w) => encodeBrSet(w, { names: members.map((_, k) => `Room ${k + 1}`), members, limitSec: 0, autoMove: true, allowReturn: true }));
+    await sleep(500);
+    const tBr = now();
+    host.ms.send((w) => encodeBrCmd(w, BR.open));
+    const moved = await until(() => others.every((p) => p.m.br.some((x) => x?.kind === 'move')), 15000);
+    ok(moved >= 0, `breakouts: all ${others.length} sent a move (${Math.round(moved)} ms)`);
+    await all(others, async (p) => {
+      const mv = p.m.br.find((x) => x?.kind === 'move');
+      p.bm = { id: '', roster: new Map(), br: [] };
+      p.bs = mv
+        ? await ws(p, `/rtc?room=${encodeURIComponent(mv.room)}&name=Person%20${p.i}&bt=${encodeURIComponent(mv.ticket)}`, (h, r) => {
+            const f = decodeMeetingFrame(h, r);
+            if (f.welcome && !p.bm.id) p.bm.id = f.welcome.id;
+            if (f.roster) {
+              if (f.roster.present) p.bm.roster.set(f.roster.id, 1);
+              else p.bm.roster.delete(f.roster.id);
+            }
+            if (f.br) p.bm.br.push(f.br);
+          }).catch(() => null)
+        : null;
+    });
+    const perRoom = Math.floor(others.length / rooms);
+    const inRooms = await until(() => others.every((p) => p.bs && p.bm.roster.size >= perRoom), 20000);
+    ok(inRooms >= 0, `everyone entered their breakout room on their ticket and sees its people (${Math.round(now() - tBr)} ms from open)`);
+    host.ms.send((w) => encodeBrAnnounce(w, 'Two minutes left'));
+    const heard = await until(() => others.every((p) => p.bm.br.some((x) => x?.kind === 'announce') || p.m.br.some((x) => x?.kind === 'announce')), 10000);
+    ok(heard >= 0, `an announcement reaches every breakout room (${Math.round(heard)} ms)`);
+    host.ms.send((w) => encodeBrCmd(w, BR.close));
+    const back = await until(() => others.every((p) => p.bm.br.some((x) => x?.kind === 'return') || p.m.br.some((x) => x?.kind === 'return')), 15000);
+    ok(back >= 0, `closing the rooms sends everyone back (${Math.round(back)} ms)`);
+    for (const p of others) p.bs?.close();
+    await sleep(1000);
+
+    // A poll in the group: everyone votes at once; every socket converges.
+    const poll = await host.req('POST', `/api/messaging/conversations/${g.id}/messages`, { body: 'Ship on Friday?', meta: JSON.stringify({ poll: { q: 'Ship on Friday?', options: ['Yes', 'No'], multi: false, anon: false } }) });
+    await sleep(500);
+    const votes = await Promise.all(people.slice(1).map((p) => p.req('POST', `/api/messaging/messages/${poll.id}/vote`, { options: [p.i % 2] }).then(() => 1, () => 0)));
+    ok(votes.every(Boolean), `${N - 1} votes at once, all accepted (${votes.filter((v) => !v).length} refused)`);
+    const tally = (p) => [...p.chat.msgs].reverse().find((m) => m.id === poll.id)?.poll?.total ?? 0;
+    const conv = await until(() => people.every((p) => tally(p) === N - 1), 20000);
+    ok(conv >= 0, `every socket converges on the tally of ${N - 1} (${Math.round(conv)} ms)`);
+
+    // Files: fifty uploads at once, then fifty downloads of one of them.
+    const uploaders = people.slice(0, Math.min(50, N));
+    const blob = new Uint8Array(256 * 1024).map((_, i) => (i * 31) & 255);
+    const tUp = now();
+    const ups = await Promise.all(uploaders.map(async (p) => {
+      const fd = new FormData();
+      fd.append('body', `file from ${p.i}`);
+      fd.append('file', new Blob([blob], { type: 'application/octet-stream' }), `data-${p.i}.bin`);
+      const r = await fetch(`${BASE}/api/messaging/conversations/${g.id}/files`, { method: 'POST', headers: csrfHdr(p), body: fd });
+      return r.status === 201 ? await r.json() : null;
+    }));
+    metric(`files: ${uploaders.length} uploads of 256 KB at once (ms)`, now() - tUp);
+    ok(ups.every(Boolean), `every upload accepted (${ups.filter((u) => !u).length} refused)`);
+    const fileId = ups.find(Boolean)?.attachments?.[0]?.id;
+    const tDown = now();
+    const downs = await Promise.all(uploaders.map(async (p) => {
+      const r = await fetch(`${BASE}/api/messaging/files/${fileId}`, { headers: { 'x-forwarded-for': p.ip, cookie: p.cookie } });
+      const b = new Uint8Array(await r.arrayBuffer());
+      return r.status === 200 && b.length === blob.length && b[1000] === blob[1000];
+    }));
+    metric(`files: ${uploaders.length} downloads at once (ms)`, now() - tDown);
+    ok(downs.every(Boolean), `every download whole and right (${downs.filter((d) => !d).length} wrong)`);
+
+    // Search, everyone at once.
+    const sMs = [];
+    await all(people, async (p) => {
+      const t = now();
+      await p.req('GET', `/api/messaging/search?q=${encodeURIComponent('file from ' + ((p.i + 1) % N))}&limit=20`).catch(() => null);
+      sMs.push(now() - t);
+    });
+    metric('search: everyone at once, ms', dist(sMs));
+  }
+  await end();
 
   // ---- the UI at N --------------------------------------------------------
   if (UI) {

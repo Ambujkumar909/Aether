@@ -135,6 +135,10 @@ ARCHITECTURE §6br; `tools/e2e/stress.mjs` (`--n`, `--msgs`, `--ui`, `--bin`), `
 
 ARCHITECTURE §6bs; media phase in `tools/e2e/stress.mjs` (`--no-media`, `--media-seconds`). Socket cameras follow each viewer's viewport (`room/sockview.go`, participant ids in `reportViewport`), a lagging receiver drops whole frames until a key frame instead of being disconnected (`Conn.EmitMedia`, 2 MB media budget), and one sender's media has a 25 Mbit/s / 6 MB allowance. 50 people: 4.13 to 1.00 Mbit/s each, 206 to 49.7 Mbit/s out; a 24 MB flood: 2 GB to 352 MB.
 
+## Batch 20 — done: every other meeting feature under load; ordered pushes; shared media payloads
+
+ARCHITECTURE §6bt; the "controls" phase of `tools/e2e/stress.mjs` (Q&A, notes, captions, host controls, breakouts, polls, files, search). `pushMessage` serialises a message's pushes with a dirty re-run (`pushorder_test.go`: monotonic tallies under 100 concurrent votes, and a gated interleaving); media payloads are shared across receivers (`wire.EncodeBatchParts`, `Conn.EmitMedia(payload)`), and a grown write buffer is released.
+
 ## Next, in order
 
 1. Media at 50 over WebRTC: simulated RTP senders against the SFU allocator (browsers cannot run fifty encoders). Fix `load.e2e.mjs`'s server CPU/memory sampling (reads 0).

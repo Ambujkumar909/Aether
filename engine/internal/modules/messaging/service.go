@@ -15,6 +15,10 @@ import (
 
 // Service is the messaging business logic.
 type Service struct {
+	// pushMu guards pushing: a message's push in progress (pushMessage).
+	pushMu  sync.Mutex
+	pushing map[string]*pushRun
+
 	// LiveNow is the rooms' view: account id -> presenting?, for everyone
 	// in a room this moment. Injected so this module never imports the
 	// room package. Nil means no rooms, and no automatic status.
@@ -320,7 +324,46 @@ func (s *Service) Saved(ctx context.Context, a Actor, limit int) ([]*Message, er
 
 // pushMessage re-sends one message to the conversation, so a change to it --
 // a reaction, an edit -- reaches everybody without a second protocol.
+//
+// Pushes of one message run one at a time, each reading the state fresh, and
+// a change that arrives during one marks the message dirty so the push runs
+// again. Without this, 199 people voting at once each read a tally and
+// pushed it, and two pushes read moments apart could reach a member in the
+// opposite order: that member was left showing an older count, and nothing
+// ever corrected it (the 200-person stress run, ARCHITECTURE 6bt). Serialised,
+// the last change is always followed by a push of the final state; under a
+// storm, most changes ride on a push already running, so 199 votes cost a few
+// pushes rather than 199 of them to every member.
 func (s *Service) pushMessage(ctx context.Context, a Actor, convID, messageID string) {
+	s.pushMu.Lock()
+	if s.pushing == nil {
+		s.pushing = map[string]*pushRun{}
+	}
+	if run := s.pushing[messageID]; run != nil {
+		run.dirty = true
+		s.pushMu.Unlock()
+		return
+	}
+	run := &pushRun{}
+	s.pushing[messageID] = run
+	s.pushMu.Unlock()
+	for {
+		s.pushOnce(ctx, a, convID, messageID)
+		s.pushMu.Lock()
+		if !run.dirty {
+			delete(s.pushing, messageID)
+			s.pushMu.Unlock()
+			return
+		}
+		run.dirty = false
+		s.pushMu.Unlock()
+	}
+}
+
+// pushRun: a message's push in progress, and whether it changed meanwhile.
+type pushRun struct{ dirty bool }
+
+func (s *Service) pushOnce(ctx context.Context, a Actor, convID, messageID string) {
 	m, err := s.repo.MessageByID(ctx, messageID)
 	if err != nil {
 		return

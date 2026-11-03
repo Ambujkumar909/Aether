@@ -5044,3 +5044,53 @@ The harness's server CPU and memory columns read 0: its process sampling does no
 Every socket-media harness passes against the new server: video, share, audio, mute, spotlight, controls, call and health.
 
 **Not covered yet:** media at 50 over WebRTC needs fifty encoders. Simulating RTP senders, rather than browsers, is the way to measure the SFU's allocator at that scale.
+
+### 6bt. Every other meeting feature under load, and the push that could go backwards
+
+The stress harness's "controls" phase runs, with all N people in the meeting:
+
+- **Q&A:** everyone asks at once, then everyone likes one question.
+- **Meeting notes:** twenty people add items at once.
+- **Live captions:** ten people speak at once, at the browser's pace (the whole line every 350 ms, then the final line). Then a muted speaker tries.
+- **Host controls:** spotlight, lower all hands, mute all, and five people made presenters.
+- **Breakout rooms:** five rooms. Everyone is moved, enters on their ticket, hears an announcement, and is brought back.
+- **A poll in the group:** everyone votes at once.
+- **Files:** fifty uploads of 256 KB at once, then fifty downloads.
+- **Search:** everyone at once.
+
+**At 200 people:**
+
+| | 200 people |
+|---|---|
+| Q&A: 200 questions at once | 120 ms; every one pushed to everyone; the liked question shows 199 likes |
+| Notes: 20 items at once | all 20 kept |
+| Captions: 10 speakers at once | every final line to all 200, 1.13 s from the first word |
+| A muted speaker's caption | reaches nobody |
+| Spotlight, lower hands, mute all, 5 presenters | each to everyone in ~62 ms |
+| Breakouts: 199 people into 5 rooms | moved in 62 ms; all in their rooms, seeing each other, 465 ms from open; announcement and return ~62 ms |
+| Poll: 199 votes at once | all accepted; every socket on 199 within 51 ms |
+| Files: 50 × 256 KB up / down at once | 112 ms / 37 ms, every byte right |
+| Search: 200 at once | p50 94 ms, p99 130 ms |
+
+**Found: a member could be left on an old count.** Every vote, and every reaction, read the message's tally and pushed it to the conversation. With 199 votes at once, two pushes read moments apart could reach a member in the opposite order. That member was shown 57 after 58, and if the last two crossed, kept the wrong count for good: the 200-person run had one socket that never converged.
+
+A test experiment on the old code measured 18 to 33 backwards steps in every 100-vote storm on a single socket. The final value was usually right only because the writes finished first.
+
+Now a message's pushes run one at a time, each reading the state fresh. A change that arrives during one marks the message dirty, and the running push goes round again. So:
+
+- the last change is always followed by a push of the final state;
+- what a member is shown never goes backwards;
+- under a storm most changes ride on a push already running, so 100 votes cost 2 to 4 pushes instead of 100 to every member.
+
+Two tests (`pushorder_test.go`) cover it:
+
+- **No backwards steps.** 100 concurrent votes, with the gap between reading and sending widened the way a 200-member fan-out widens it, must produce no backwards step and the right final tally. It failed against the old code every time.
+- **The re-push.** A gate holds one push between its read and its send while the last vote lands; the member must end on the last vote's tally. That makes the dirty re-push deterministic: the first test had caught its removal only once in five runs, which is luck, not evidence.
+
+**Found: the flood's memory was copies.** Every receiver was given its own copy of each media frame. Payloads are now shared:
+
+- each receiver queues only its few-byte header (the publisher's id in its own dictionary);
+- the payload is joined to it once, in that connection's reusable write buffer, when it is sent (`wire.EncodeBatchParts`);
+- a write buffer a burst grew past 256 KB is released after the flush instead of kept.
+
+A 24 MB flood into a 200-person meeting took the server from 227 MB to 1,486 MB before this, and from 208 MB to 418 MB after. Every frame was still delivered, and the per-receiver 2 MB budget is the bound.
