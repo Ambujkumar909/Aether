@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/mail"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -108,6 +110,40 @@ func NewService(repo Repository, rec audit.Recorder, log *slog.Logger) *Service 
 // Password hashing
 // ---------------------------------------------------------------------------
 
+// hashSlots bounds how many argon2id computations run at once.
+//
+// Each one holds argonMemory (19 MiB) for its duration and is pure CPU, so
+// running more at once than there are cores buys no throughput and only
+// memory. Unbounded, the 50-person stress run's simultaneous sign-ins took
+// the server to 992 MB (ARCHITECTURE 6br) -- and a failed login hashes too
+// (against the dummy hash, to keep timing equal), so anybody could drive it
+// there with logins from enough addresses.
+//
+// Bounded by the cores, but never more than maxHashSlots: on a many-core
+// machine one slot per core still let 200 sign-ins hold 633 MB. Eight slots
+// are about 150 MB and about 160 sign-ins a second (over half a million an
+// hour), and leave the other cores to the meetings.
+const maxHashSlots = 8
+
+var hashSlots = make(chan struct{}, min(runtime.GOMAXPROCS(0), maxHashSlots))
+
+// hashInFlight and hashPeak let the test see the bound hold.
+var hashInFlight, hashPeak atomic.Int32
+
+func idKey(plain, salt []byte, t, mem uint32, p uint8, n uint32) []byte {
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
+	in := hashInFlight.Add(1)
+	defer hashInFlight.Add(-1)
+	for {
+		peak := hashPeak.Load()
+		if in <= peak || hashPeak.CompareAndSwap(peak, in) {
+			break
+		}
+	}
+	return argon2.IDKey(plain, salt, t, mem, p, n)
+}
+
 // HashPassword produces a PHC-format argon2id string. The format carries its
 // own parameters, so raising the cost later does not invalidate existing
 // hashes: they keep verifying with the parameters they were made with, and
@@ -117,7 +153,7 @@ func HashPassword(plain string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("identity: read salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(plain), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	key := idKey([]byte(plain), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, argonMemory, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
@@ -149,7 +185,7 @@ func VerifyPassword(plain, encoded string) bool {
 	if err != nil {
 		return false
 	}
-	got := argon2.IDKey([]byte(plain), salt, t, mem, p, uint32(len(want)))
+	got := idKey([]byte(plain), salt, t, mem, p, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

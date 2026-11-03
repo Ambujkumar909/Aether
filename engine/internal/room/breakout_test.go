@@ -124,11 +124,11 @@ func TestBreakoutReapAndEnd(t *testing.T) {
 	r.OpenBreakouts(time.Now(), nil)
 	r.Leave("p0")
 	r.Leave("p1")
-	if n := rg.Reap(time.Minute); n != 0 {
+	if n := rg.Reap(time.Minute, nil); n != 0 {
 		t.Fatal("reaped a meeting whose rooms are open")
 	}
 	r.CloseBreakouts()
-	if n := rg.Reap(time.Minute); n != 1 {
+	if n := rg.Reap(time.Minute, nil); n != 1 {
 		t.Fatal("an empty meeting with closed rooms was kept")
 	}
 

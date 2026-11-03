@@ -49,7 +49,7 @@ test('anything that is not exactly one mask is refused', () => {
 });
 
 import { Writer, Reader, newDictPair } from './wire.js';
-import { encodeSet, encodeOutline, decodeTogether, seats, SCENES } from './together.js';
+import { encodeSet, encodeOutline, decodeTogether, seats, SCENES, PORTRAIT } from './together.js';
 
 test('the state and an outline decode as the server writes them', () => {
   const { tx, rx } = newDictPair();
@@ -85,6 +85,28 @@ test('seats: one each, on the stage, not overlapping, front row largest', () => 
     if (n > 4) assert.ok(s[0].w > s[n - 1].w, 'the front row is larger');
   }
   assert.deepEqual(seats(0, 0), []);
+});
+
+test('seats, upright: on the stage, at most five to a row, readable at fifty', () => {
+  for (const scene of SCENES.map((x) => x.id)) for (const n of [1, 3, 7, 12, 25, 49, 50]) {
+    const s = seats(scene, n, true);
+    assert.equal(s.length, n);
+    const perRow = new Map();
+    for (const a of s) {
+      assert.ok(a.x >= 0 && a.y >= 0 && a.x + a.w <= 1 + 1e-9 && a.y + a.h <= 1 + 1e-9, `on stage: ${JSON.stringify(a)}`);
+      perRow.set(a.row, (perRow.get(a.row) ?? 0) + 1);
+      // A seat is 16:9 on screen in a 3:4 scene.
+      assert.ok(Math.abs(a.h - a.w * PORTRAIT * (9 / 16)) < 1e-9, 'the seat keeps its shape');
+    }
+    assert.ok(Math.max(...perRow.values()) <= 5, `${n}: at most five to a row`);
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      const a = s[i], b = s[j];
+      if (a.row === b.row) assert.ok(Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) <= 1e-9, 'no overlap in a row');
+    }
+    if (n > 5) assert.ok(s[0].w >= s[n - 1].w, 'the front row is not smaller');
+    // On a 390-px phone a seat is wide enough to show a first name.
+    if (n === 50) assert.ok(Math.min(...s.map((a) => a.w)) * 390 >= 44, `smallest seat ${Math.min(...s.map((a) => a.w)) * 390} px`);
+  }
 });
 
 test('hysteresis: a wobbling edge does not flip a cell', () => {

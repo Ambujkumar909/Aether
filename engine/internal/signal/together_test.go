@@ -42,7 +42,7 @@ func togSeen(got []seen) []seen {
 // it is on, to everyone but the sender, bounded in size and rate.
 func TestTogetherThroughGateway(t *testing.T) {
 	f := newPresenterFixture(t, "a", "b", "c") // a hosts
-	f.rm.SetRole("b", wire.RoleModerator)     // a presenter is not enough
+	f.rm.SetRole("b", wire.RoleModerator)      // a presenter is not enough
 	quiet := func(why string, ids ...string) {
 		t.Helper()
 		for _, id := range ids {

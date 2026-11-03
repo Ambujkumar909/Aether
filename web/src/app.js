@@ -63,7 +63,7 @@ import {
 } from './captions.js';
 import { directory, messaging, qna, notes, transcript as transcriptApi } from './api.js';
 import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, loadSettings as loadFx, saveSettings as saveFx, normalize as normalizeFx, needsPipeline as fxNeedsPipeline, listImages as fxListImages, addImage as fxAddImage, removeImage as fxRemoveImage, loadSegmenter } from './effects.js';
-import { quantize as togQuantize, encodeMask as togEncode, MASK_W as TOG_W, MASK_H as TOG_H, MAX_MASK_BYTES as TOG_MAX, encodeSet as encodeTogSet, encodeOutline as encodeTogOutline, decodeTogether, seats as togSeats, SCENES as TOG_SCENES } from './together.js';
+import { quantize as togQuantize, encodeMask as togEncode, MASK_W as TOG_W, MASK_H as TOG_H, MAX_MASK_BYTES as TOG_MAX, encodeSet as encodeTogSet, encodeOutline as encodeTogOutline, decodeTogether, seats as togSeats, SCENES as TOG_SCENES, PORTRAIT as TOG_PORTRAIT } from './together.js';
 import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as recBanner, elapsed as recElapsed, pickMime, ChunkSink, fileName as recFileName, WHAT as REC } from './recording.js';
 import { WSMediaSender, WSMediaReceiver, wsMediaSupported } from './wsmedia.js';
 import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence } from './chat.js';
@@ -3025,12 +3025,15 @@ function drawTogether() {
   const look = TOG_LOOK[state.together.scene] ?? TOG_LOOK[0];
   g.fillStyle = look.floor;
   g.fillRect(0, 0, W, H);
-  // The scene at 16:9, centred.
-  const sw = Math.min(W, (H * 16) / 9), sh = (sw * 9) / 16, ox = (W - sw) / 2, oy = (H - sh) / 2;
+  // The scene at 16:9, centred; on a screen held upright, at 3:4 with fewer
+  // people to a row (together.js, PORTRAIT).
+  const portrait = H > W;
+  const ar = portrait ? TOG_PORTRAIT : 16 / 9;
+  const sw = Math.min(W, H * ar), sh = sw / ar, ox = (W - sw) / 2, oy = (H - sh) / 2;
   g.fillStyle = look.wall;
   g.fillRect(ox, oy, sw, sh * 0.7);
   const people = participants().filter((p) => !p.presentation);
-  const st = togSeats(state.together.scene, people.length);
+  const st = togSeats(state.together.scene, people.length, portrait);
   const rows = new Map();
   people.forEach((p, i) => {
     const s = st[i];
@@ -3103,10 +3106,18 @@ function drawTogether() {
     g.fillStyle = look.edge;
     g.fillRect(dx, dy, dw, Math.max(2, dh * 0.12));
     g.fillStyle = '#e7ecef';
-    g.font = `500 ${Math.max(10, Math.round(dh * 0.42))}px system-ui, sans-serif`;
+    // Names: never squeezed to fit. The whole name if it fits the seat at a
+    // readable size, else the first name, else the initials.
+    const px = Math.max(11 * dpr, Math.round(dh * 0.42));
+    g.font = `500 ${px}px system-ui, sans-serif`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    for (const { p, s } of list) g.fillText(p.self ? 'You' : p.name, ox + (s.x + s.w / 2) * sw, dy + dh * 0.58, s.w * sw);
+    for (const { p, s } of list) {
+      const room = s.w * sw * 1.08;
+      const full = p.self ? 'You' : p.name || '';
+      const label = [full, full.split(/\s+/)[0], initials(faceOf(p))].find((t) => g.measureText(t).width <= room) ?? '';
+      g.fillText(label, ox + (s.x + s.w / 2) * sw, dy + dh * 0.58);
+    }
   }
 }
 

@@ -16,6 +16,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { randomBytes, createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Reader, Writer, Op, newDictPair, splitBatch } from '../../web/src/wire.js';
+import { decodeChatFrame } from './chatframes.mjs';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // the dev certificate is self-signed
 const BASE = process.argv[2] || 'https://localhost:8443';
@@ -192,86 +193,7 @@ function openPush(client, device = '') {
         splitBatch(r, (inner) => deliver(Buffer.from(inner)));
         return;
       }
-      const f = { op: h.op, raw: bytes };
-      // Activity frames intern strings: read them, or every later frame on
-      // this socket decodes against a dictionary that has fallen behind.
-      if (h.op === Op.Activity) {
-        const kind = r.bits(2);
-        r.bits(6);
-        if (kind === 0) { for (let i = 0; i < 12; i++) r.str(); r.uvarint(); r.bits(8); r.blob(); r.uvarint(); }
-        else if (kind === 1) { const n = r.uvarint(); for (let i = 0; i < n; i++) r.str(); r.uvarint(); }
-        else if (kind === 2) { r.str(); r.uvarint(); }
-      }
-      if (h.op === Op.ConvMessage) {
-        f.msg = {
-          conversationId: r.str(),
-          id: r.str(),
-          senderId: r.str(),
-          senderName: r.str(),
-          createdAt: Number(r.uvarint()),
-          deleted: r.bool(),
-          edited: r.bool(),
-          forwarded: r.bool(),
-          system: r.bool(),
-        };
-        r.bits(4);
-        f.msg.body = new TextDecoder().decode(r.blob());
-        f.msg.replyTo = r.str();
-        if (f.msg.replyTo) {
-          f.msg.quoted = { senderId: r.str(), senderName: r.str(), deleted: r.bool() };
-          r.bits(7);
-          f.msg.quoted.body = new TextDecoder().decode(r.blob());
-        }
-        const n = Number(r.uvarint());
-        f.msg.reactions = [];
-        for (let i = 0; i < n; i++) {
-          const emoji = r.str();
-          const count = Number(r.uvarint());
-          const k = Number(r.uvarint());
-          const who = [];
-          for (let j = 0; j < k; j++) who.push(r.str());
-          f.msg.reactions.push({ emoji, count, who });
-        }
-        const nAtt = Number(r.uvarint());
-        f.msg.attachments = [];
-        for (let i = 0; i < nAtt; i++) {
-          f.msg.attachments.push({ id: r.str(), name: r.str(), mime: r.str(), size: Number(r.uvarint()) });
-        }
-        const nMen = Number(r.uvarint());
-        f.msg.mentions = [];
-        for (let i = 0; i < nMen; i++) f.msg.mentions.push(r.str());
-        f.msg.priority = r.str();
-        f.msg.meta = new TextDecoder().decode(r.blob());
-        const nOpt = Number(r.uvarint());
-        if (nOpt > 0) {
-          const counts = [];
-          const voters = [];
-          for (let i = 0; i < nOpt; i++) {
-            counts.push(Number(r.uvarint()));
-            const k = Number(r.uvarint());
-            const who = [];
-            for (let j = 0; j < k; j++) who.push(r.str());
-            voters.push(who);
-          }
-          f.msg.poll = { counts, voters, total: Number(r.uvarint()) };
-        }
-        f.decodeError = !!r.err;
-      } else if (h.op === Op.Status) {
-        f.status = { who: r.str(), status: r.str(), note: r.str(), until: Number(r.uvarint()) };
-        f.status.auto = r.bool();
-        f.status.online = r.bool();
-        r.bits(6);
-        f.status.lastSeen = Number(r.uvarint());
-      } else if (h.op === Op.Presence) {
-        f.presence = { who: r.str(), on: r.bool() };
-        r.bits(7);
-        f.presence.lastSeen = Number(r.uvarint());
-      } else if (h.op === Op.ReadCursor) {
-        f.read = { convId: r.str(), who: r.str(), at: Number(r.uvarint()) };
-      } else if (h.op === Op.Typing) {
-        f.typing = { convId: r.str(), who: r.str(), whoId: r.str(), on: r.bool() };
-        r.bits(7);
-      }
+      const f = decodeChatFrame(h, r, { op: h.op, raw: bytes });
       if (waiters.length) waiters.shift()(f);
       else frames.push(f);
     };

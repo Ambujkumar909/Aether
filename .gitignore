@@ -19,3 +19,4 @@ graphify-out/
 
 # Personal screenshots in the project root.
 /Screenshot *.png
+tools/e2e/.stress/

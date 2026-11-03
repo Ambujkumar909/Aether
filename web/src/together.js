@@ -138,8 +138,15 @@ export const SCENES = [
 // Seats in rows across the stage, the back rows smaller and higher, as in a
 // raked auditorium. Each seat is { x, y, w, h } as fractions of a 16:9 scene,
 // the person's 16:9 picture drawn into it. Rows tighten as people arrive.
-export function seats(scene, n) {
+// PORTRAIT is the scene's shape on a tall screen (a phone held upright):
+// 3:4, at most five to a row. Drawn at 16:9 on a phone, fifty people sat
+// thirteen to a row in a strip a third of the screen tall, and their names
+// were five pixels high (the 50-person stress run, ARCHITECTURE 6br).
+export const PORTRAIT = 3 / 4;
+
+export function seats(scene, n, portrait = false) {
   if (n <= 0) return [];
+  if (portrait) return portraitSeats(scene, n);
   const rows = n <= 4 ? 1 : n <= 10 ? 2 : n <= 18 ? 3 : 4;
   const out = [];
   let left = n;
@@ -154,6 +161,42 @@ export function seats(scene, n) {
     const w = Math.min((spread / inRow) * 0.92, rows === 1 ? 0.34 : 0.3) * scale;
     const h = w; // the scene is drawn at 16:9, so a 16:9 seat is as tall as it is wide here
     const y = (rows === 1 ? 0.56 : 0.62) - depth * 0.42 - (scene === 1 ? 0.04 : 0);
+    const total = inRow * w + (inRow - 1) * w * 0.12;
+    const x0 = (1 - total) / 2;
+    for (let i = 0; i < inRow; i++) out.push({ x: x0 + i * w * 1.12, y, w, h, row });
+  }
+  return out;
+}
+
+// The upright scene: five to a row at most, rows stepping back up the
+// screen. Coordinates are fractions of a 3:4 scene; a seat is 16:9 on screen,
+// so its height as a fraction is its width x (3/4) x (9/16).
+function portraitSeats(scene, n) {
+  const perRow = Math.min(5, Math.max(2, Math.ceil(Math.sqrt(n * 0.6))));
+  const rows = Math.ceil(n / perRow);
+  const out = [];
+  let left = n;
+  const spread = scene === 2 ? 0.88 : 0.94;
+  // Room for every row between the floor (0.9) and the top of the wall.
+  const front = 0.9;
+  const top = 0.06;
+  let bottom = front;
+  for (let row = 0; row < rows; row++) {
+    const inRow = Math.ceil(left / (rows - row));
+    left -= inRow;
+    const depth = rows === 1 ? 0 : row / (rows - 1);
+    const scale = 1 - 0.22 * depth;
+    let w = Math.min((spread / perRow) * 0.92, 0.42) * scale;
+    let h = w * PORTRAIT * (9 / 16);
+    // Rows overlap a little (the back row's desk hides behind the front
+    // row's heads), and every row must fit above the floor.
+    const pitch = Math.min(h * 0.95, (front - top) / Math.max(1, rows));
+    if (h * 0.95 > pitch) {
+      w *= pitch / (h * 0.95);
+      h = w * PORTRAIT * (9 / 16);
+    }
+    const y = bottom - h;
+    bottom -= pitch;
     const total = inRow * w + (inRow - 1) * w * 0.12;
     const x0 = (1 - total) / 2;
     for (let i = 0; i < inRow; i++) out.push({ x: x0 + i * w * 1.12, y, w, h, row });

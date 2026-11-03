@@ -164,7 +164,17 @@ this repository. Each one is written up, with its method, in
 <tr><td>A spoken sentence, as live captions</td><td align="right">945 B as JSON</td><td align="right"><b>289 B</b></td><td>3.3× smaller</td></tr>
 <tr><td>Searching 50,000 people per keystroke</td><td align="right">28 ms with <code>LIKE</code></td><td align="right"><b>0.5 ms</b></td><td>index-backed, with a scale test</td></tr>
 <tr><td>A meeting where nobody is doing anything</td><td align="right">keep-alives and polls</td><td align="right"><b>nothing</b></td><td>idle costs zero</td></tr>
+<tr><td>One person flooding 500 reactions into a 200-person meeting</td><td align="right">500 frames to each of 199</td><td align="right"><b>4</b></td><td>held to an allowance before the fan-out</td></tr>
 </table>
+
+**Under load, with the numbers.** `tools/e2e/stress.mjs` puts 50 or 200 people, each with their
+own account and address, through chat, reactions, @mentions, teams, the activity feed and a
+meeting (hands, reactions, whiteboard, Together mode, floods) at once. At 200 people a burst of
+1,000 messages became 199,000 deliveries: none lost, none repeated, none out of order. When
+everyone leaves, the server is back to 17 goroutines, with no rooms or media routes left. The run
+found five defects, fixed them, and also found a limit not yet fixed: a 5,000-member channel
+costs 26 ms a message to write. All of it is in
+[ARCHITECTURE §6br](docs/ARCHITECTURE.md).
 
 **Coalescing, not just encoding, is what makes a connection dense.** At one frame per message,
 60 bytes of IP and TCP ride on every tiny payload, and only 27.1% of the bytes are application

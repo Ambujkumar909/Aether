@@ -6,13 +6,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/aether-rtc/aether/internal/ledger"
 	"github.com/aether-rtc/aether/internal/modular"
+	"github.com/aether-rtc/aether/internal/platform/httpx"
 	"github.com/aether-rtc/aether/internal/room"
 	"github.com/aether-rtc/aether/internal/sfu"
 	"github.com/aether-rtc/aether/internal/wire"
@@ -38,6 +38,10 @@ type Gateway struct {
 	// scheduling: an ad-hoc room then keeps the room package's own default,
 	// which is trusted rather than open.
 	RoomPolicy func(ctx context.Context, room string) (admission, organizerID string, ok bool)
+
+	// TrustProxy reads the client's address from X-Forwarded-For, as the
+	// HTTP modules do with the same flag.
+	TrustProxy bool
 
 	// Invited reports whether an account holds an invitation to a scheduled
 	// room, as organiser or invitee. Injected like RoomPolicy, and nil for a
@@ -158,10 +162,20 @@ func (g *Gateway) reaper(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if n := g.Rooms.Reap(2 * time.Minute); n > 0 {
+			// The room's media router goes with it. It used to stay: Drop had
+			// no caller, and every room ever used kept a router for the life
+			// of the process (found by the stress run, ARCHITECTURE 6br).
+			if n := g.Rooms.Reap(2*time.Minute, g.dropMedia); n > 0 {
 				g.Log.Info("reaped empty rooms", "count", n)
 			}
 		}
+	}
+}
+
+// dropMedia stops and removes a reaped room's router.
+func (g *Gateway) dropMedia(id string) {
+	if g.Media != nil {
+		g.Media.Drop(id)
 	}
 }
 
@@ -202,7 +216,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c := NewConn(ws, g.Meter.Child("conn"))
 	c.RoomID = roomID
 	c.ParticipantID = newID()
-	c.Addr = hostOnly(r.RemoteAddr)
+	// The person's address, by the same rule as every other module: behind
+	// a proxy, every connection's RemoteAddr is the proxy's, and "N others
+	// are on this same device" went to everybody in every meeting (found by
+	// the stress run, ARCHITECTURE 6br).
+	c.Addr = httpx.ClientIP(r, g.TrustProxy)
 	if g.Identify != nil {
 		c.UserID, c.UserEmail = g.Identify(r)
 	}
@@ -543,6 +561,11 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		// asserts otherwise is ignored rather than trusted.
 		s.Participant = p.ID
 		s.Role = p.Role
+		// Nothing changed: nothing goes to anybody (rule 2). And a person
+		// toggling for its own sake is held to a rate before the fan-out.
+		if s == p.State || !rm.Allowed(p.ID, room.AllowState, time.Now()) {
+			return nil
+		}
 		sharingChanged := p.State.Sharing != s.Sharing
 		p.State = s
 		if sharingChanged && g.OnPresence != nil && p.UserID != "" {
@@ -727,6 +750,9 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		return g.handleBreakout(rm, p, r)
 
 	case wire.OpWhiteboard:
+		if !rm.Allowed(p.ID, room.AllowBoard, time.Now()) {
+			return nil
+		}
 		return g.handleWhiteboard(rm, p, r)
 
 	case wire.OpRecording:
@@ -866,7 +892,7 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		if err := sp.Decode(r); err != nil {
 			return err
 		}
-		if len(sp.List) == 0 {
+		if len(sp.List) == 0 || !rm.Allowed(p.ID, room.AllowSpeakers, time.Now()) {
 			return nil
 		}
 		ranked, changed := rm.ObserveEnergy(p.ID, sp.List[0].Energy)
@@ -881,7 +907,9 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 			for i, s := range ranked {
 				ranks[s.Participant] = i
 			}
-			router.SetSpeakerRank(ranks)
+			if router != nil {
+				router.SetSpeakerRank(ranks)
+			}
 		}
 
 	case wire.OpBweReport:
@@ -961,7 +989,7 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		// Refused here rather than hidden in the client. A participant whose
 		// chat has been turned off can still construct the frame; what stops
 		// the message is that nothing dispatches it.
-		if !rm.May(p.ID, "chat") {
+		if !rm.May(p.ID, "chat") || !rm.Allowed(p.ID, room.AllowChat, time.Now()) {
 			return nil
 		}
 		body := r.Blob()
@@ -988,6 +1016,9 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		// pasting a paragraph into the reaction field.
 		if len([]rune(emoji)) > 8 {
 			return nil
+		}
+		if !rm.Allowed(p.ID, room.AllowReaction, time.Now()) {
+			return nil // over the allowance: dropped, silently, like the browser's own throttle
 		}
 		g.announceAll(rm, func(w *wire.Writer) {
 			w.WriteHeader(wire.OpReaction, 0, false)
@@ -1190,15 +1221,6 @@ func (g *Gateway) adviseSameDevice(rm *room.Room, p *room.Participant) {
 			tell(q.ID, rm.SameAddr(q.Addr, q.ID))
 		}
 	}
-}
-
-// hostOnly strips the port from an address; an address that is not
-// host:port is returned as is.
-func hostOnly(addr string) string {
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		return h
-	}
-	return addr
 }
 
 // keyframeReqWindow bounds how often a socket publisher is asked for a

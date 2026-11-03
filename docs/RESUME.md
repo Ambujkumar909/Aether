@@ -127,12 +127,21 @@ ARCHITECTURE §6bp; migrations 0060-0066, `messaging/teams.go` + `teams_handler.
 
 ARCHITECTURE §6bq; migration 0067, `messaging/activity.go` (+ `activity_test.go`), `OpActivity` 0x129, hooks in `service.go` / `compose.go` / `teams.go` / `repository.go`, chat-socket coalescing in `hub.go` (`writePump`, `TestWriterCoalesces`), Activity surface at the end of `chat.js`, `tools/e2e/activity.e2e.mjs`, `tools/e2e/measure-activity.mjs`. Gotchas: `.unread` is the global badge class (do not reuse it for row state); raw socket clients must read every frame that interns strings, or their dictionary falls behind.
 
+## Batch 18 — done: stress and scale (signalling, chat, teams, activity, meeting controls)
+
+ARCHITECTURE §6br; `tools/e2e/stress.mjs` (`--n`, `--msgs`, `--ui`, `--bin`), `tools/e2e/chatframes.mjs` (shared chat decoder). Fixes, each with a failing-first test: per-person allowances on relayed meeting frames (`room/allowance.go`), unchanged state dropped, argon2id slots min(cores, 8), media routers dropped with their rooms (`Reap(minAge, gone)`), `-trust-proxy` honoured on the meeting socket, upright Together scene + readable names, Go runtime in `/api/telemetry`. A partial index on hidden members measured 6× worse under load and was removed.
+
 ## Next, in order
 
-1. A 50-person stress and scale harness across every feature (requested): meetings, chat, channels, teams, activity, whiteboard, Together.
-2. Calendar views with a scheduling assistant.
-2. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
-3. Remaining chat items (see TEAMS_PARITY "Not built" rows).
+1. Media under stress (requested: "each and every feature ... audio, video, screenshare"): many senders of audio, camera and screen through the socket media path with synthetic frames, per-receiver frames, latency, keyframe recovery, server CPU; plus real browsers on the WebRTC path.
+2. Large conversations: count unread from the message index at read time instead of an O(members) counter write per message (§6br: 25.8 ms a send at 5,000 members, single SQLite writer).
+3. Calendar views with a scheduling assistant.
+4. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
+5. Remaining chat items (see TEAMS_PARITY "Not built" rows).
+
+## When the whole project is finished
+
+- **Restore the Windows Firewall prompts** the user asked to be turned off while work was in progress (2026-11-03): in an elevated PowerShell, `Set-NetFirewallProfile -All -NotifyOnListen True`. It was True before (the Windows default).
 
 ## How to run things
 

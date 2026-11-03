@@ -15,6 +15,7 @@ import (
 	"os"
 	ossignal "os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -195,6 +196,7 @@ func main() {
 	// knock. Taken from the guard, which reads the verified session, never
 	// from anything the client sends.
 	gw.Identify = guard.ActorOf
+	gw.TrustProxy = *trustProxy
 	// And how each scheduled room admits people, decided by its organiser at
 	// scheduling time.
 	gw.RoomPolicy = schedulingModule.Service.PolicyForRoom
@@ -540,6 +542,17 @@ type statsResponse struct {
 	Node          classBreakdown    `json:"node"`
 	Anatomy       []anatomySegment  `json:"anatomy"`
 	Media         []sfu.RouterStats `json:"media"`
+	Runtime       runtimeStats      `json:"runtime"`
+}
+
+// runtimeStats: what an operator (and the stress harness) watches for a
+// leak. OS handles cannot tell one apart from Go keeping threads it made
+// during a spike; goroutines can.
+type runtimeStats struct {
+	Goroutines int    `json:"goroutines"`
+	HeapMB     uint64 `json:"heapMB"`
+	SysMB      uint64 `json:"sysMB"`
+	Threads    int    `json:"threads"`
 }
 
 type roomStats struct {
@@ -574,7 +587,16 @@ func statsHandler(root *ledger.Meter, reg *room.Registry, media *sfu.Registry,
 			}
 		}
 
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		threads, _ := runtime.ThreadCreateProfile(nil)
 		resp := statsResponse{
+			Runtime: runtimeStats{
+				Goroutines: runtime.NumGoroutine(),
+				HeapMB:     ms.HeapAlloc >> 20,
+				SysMB:      ms.Sys >> 20,
+				Threads:    threads,
+			},
 			UptimeSeconds: snap.Elapsed.Seconds(),
 			Connections:   gw.Connections(),
 			Node: classBreakdown{

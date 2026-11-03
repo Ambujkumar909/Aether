@@ -164,6 +164,9 @@ func (f *presenterFixture) drain(id string, d time.Duration) []seen {
 						r.Uvarint()
 						out = append(out, seen{h.Op, sp, fmt.Sprint(final, ":", string(r.Blob()))})
 					}
+				case wire.OpReaction:
+					who := r.Str()
+					out = append(out, seen{h.Op, who, r.Str()})
 				case wire.OpStateDelta:
 					// Decoded in full: its strings teach the dictionary, and a
 					// client that skips them reads later references as blanks.

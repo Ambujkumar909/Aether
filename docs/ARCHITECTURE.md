@@ -4877,3 +4877,99 @@ The browser and both Node harnesses unpack batches. The messaging harness's raw 
 - Layout harness: the feed and an opened item at every width.
 
 **Not built:** missed calls, meeting starts, file shares and "trending" in the feed, and per-kind notification settings.
+
+### 6br. Stress and scale: 50 and 200 people through every live feature
+
+`tools/e2e/stress.mjs` builds the server from this checkout, starts it on a throwaway database with `-trust-proxy`, and drives N people (50 by default) through every live feature at once. Each person is a raw protocol client with its own account and its own address (a distinct `X-Forwarded-For`, as N real people would arrive from N addresses), its own chat socket and its own meeting socket.
+
+Frames are decoded with the browser's own decoders, and every frame is read: strings on both sockets are interned, and a client that skips a frame decodes everything after it wrong. The chat decoder is now shared with the messaging harness, in `tools/e2e/chatframes.mjs`.
+
+The server process is sampled at every phase: CPU, memory and OS threads. So is the server's own view: goroutines, heap, connections, rooms and media routes, read from admin telemetry, which now reports the Go runtime.
+
+`--ui` adds a real browser joining the full meeting at phone and desktop sizes. It checks that the gallery draws, that the People panel lists everyone, that Together mode fits and that nothing leaves the screen, and it saves screenshots to `tools/e2e/.stress/`.
+
+**Phases and what they assert:**
+
+- **accounts:** N concurrent sign-ins.
+- **sockets:** N chat sockets.
+- **chat:** an N-person group where everyone sends a burst. Every socket must receive every other person's messages exactly once, in each sender's order.
+- **reactions:** everyone reacts to one message at once. Every socket must converge on the count, and the author's feed must hold N−1 rows, paged.
+- **@everyone:** N−1 activity rows, each pushed. Reading the conversation must mark them read.
+- **teams:** N−1 people join one public team at once. The count must be exact, and a post in General must reach everyone.
+- **meeting:** N join at once and everyone must see all N. It covers an idle meeting, hands, reactions, the whiteboard (ten people drawing 200 strokes, then a late joiner given the whole board), Together outlines, and one person flooding each kind of relayed frame.
+- **leave:** connections, rooms, media routes and goroutines must all return to baseline.
+
+**What it found, each fixed with a test that fails without the fix:**
+
+1. **One person's flood reached everyone.** Reactions, state changes, meeting chat, speech-energy reports and the whiteboard were relayed to the whole room with no limit at the server, so one client's rate was multiplied by the room's size. Measured before the fix: 500 reactions from one person became 500 frames to each of the other 49.
+
+   Now each person has an allowance per kind, enforced before the fan-out (`room/allowance.go`):
+
+   | Kind | Rate a second | Burst |
+   |---|---|---|
+   | Reactions | 2 | 4 |
+   | State | 10 | 20 |
+   | Meeting chat | 5 | 10 |
+   | Speech energy | 8 | 16 |
+   | Whiteboard | 60 | 120 |
+
+   Each is well above the browser's own pace. A state that has not changed now goes to nobody (rule 2).
+
+   Measured after the fix, a 500-frame flood reaches each other person as:
+
+   | Flood of 500 | Relayed to each other person |
+   |---|---|
+   | Reactions | 4 |
+   | Hand toggles | 20 |
+   | Chat | 10 |
+   | Whiteboard previews | 121 |
+
+   Speech energy cannot be observed from outside: it is smoothed, and only a change of rank is announced, so 400 alternating reports relayed once even with no allowance. Its allowance is tested in the room package.
+
+2. **Sign-ins could take a gigabyte.** argon2id holds 19 MiB per hash, and there was no limit on how many hashes ran at once. 50 simultaneous sign-ins took the server to 992 MB. A failed login hashes too (against the dummy hash), so anybody could do the same with logins from enough addresses.
+
+   Hashing now runs in at most min(cores, 8) slots. The CPU count alone was not enough: this machine has 24 cores, and 200 sign-ins still held 633 MB. Eight slots are about 150 MB at most and still sign in about 160 people a second.
+
+3. **Media routers were never freed.** `sfu.Registry.Drop` had no caller, so every room ever used kept its media router for the life of the process. The reaper now drops a room's router as it removes the room, under the registry's lock: someone joining the same name in that instant gets a fresh room and a fresh router, never the one being stopped.
+
+4. **"N others are on this same device" behind a proxy.** The meeting socket took `RemoteAddr`, so behind a reverse proxy everyone shared the proxy's address. Everybody in every meeting would have been told they shared a device with everybody else. It now uses the same client-address rule as every HTTP module (`-trust-proxy`). The test drives the real `ServeHTTP` over real sockets.
+
+5. **Together mode was unreadable on a phone at 50.** The 16:9 scene put 13 people to a row in a strip a third of the screen tall, with names squeezed to about five pixels. On a screen held upright the scene is now 3:4, with at most five to a row and the rows stepping back up the screen. Names are never squeezed: the whole name if it fits, else the first name, else the initials.
+
+6. **A partial index that was not kept.** Each message un-hides the conversation for whoever hid it, a statement that walks every member. A partial index of only the hidden rows made the send benchmark slightly faster (2.80 ms to 2.68 ms at 200 members, single-threaded).
+
+   The stress run said otherwise. With 50 people sending at once, delivery p50 went from 8.5 ms to about 50 ms, steadily, over four runs. Built in a scratch worktree without the index, everything else equal, it was 7.2 ms; without it in this tree, 7.8 ms. Removed.
+
+   The lesson is the one in §6bn: a benchmark of one call is not the system under load.
+
+**Found and not fixed in this batch: large conversations write once per member per message.** A message bumps every member's unread counter in the same transaction. The send benchmark (`send_bench_test.go`) measures 2.8 ms a message at 200 members and 25.8 ms at 5,000.
+
+SQLite has one writer, so a busy 5,000-member channel holds the whole server to about 39 chat sends a second. At 200 people with everyone sending at once, the stress run's delivery latency (p50 174 ms) is almost all that queue: the send round trip is p50 171 ms. Measured from the server's reply, receipt is p50 3.2 ms and p99 10.8 ms.
+
+The fix is to count unread from the message index at read time for large conversations, instead of maintaining a counter on every member row. It touches the unread logic everywhere, so it is the next batch and not a change made in passing.
+
+**Numbers** (this machine: 24-core i7-14650HX, Windows; the clients run in one Node process on the same machine):
+
+| | 50 people | 200 people |
+|---|---|---|
+| Concurrent sign-ins, p50 / p99 | 177 / 272 ms | 562 / 1,006 ms |
+| Chat sockets open, all | 18–42 ms | 72 ms |
+| Chat burst | 500 messages → 24,500 deliveries | 1,000 → 199,000 |
+| Lost / duplicated / out of order | 0 / 0 / 0 | 0 / 0 / 0 |
+| Delivery, send start to receipt, p50 / p99 | 7.8 / 16.4 ms | 174 / 400 ms (the send queue: see above) |
+| Receipt after the server's reply, p50 / p99 | 4.1 / 6.6 ms | 3.2 / 10.8 ms |
+| Reactions to one message, all converge | 0–57 ms | 62 ms |
+| @everyone pushed to all | 56 ms | 63 ms |
+| Team: all join at once; General post reaches all | 143–176 ms; 65 ms | 280 ms; 63 ms |
+| Meeting: everyone sees everyone (from first join) | 441 ms | 1,498 ms |
+| Idle meeting, bytes per person in 3 s | 0 | 0 |
+| All hands up / a reaction each, seen by all | 62 / 61 ms | 62 / 62 ms |
+| Whiteboard: 200 strokes from 10 people, to all | 607 ms | 614 ms |
+| Late joiner given the whole board (200 strokes) | 13,431 B | 20,732 B |
+| Together: an outline each, to all | 53 ms | 135 ms |
+| A 500-frame flood reaches each other person as | 4 reactions, 20 states, 10 chats, 121 board frames | the same |
+| After everyone left | 17 goroutines, 0 connections, rooms, routes | the same |
+
+At 50, `--ui`: the gallery, the People panel (all 51) and Together mode at phone (390×844) and desktop (1280×800). Nothing leaves the screen, and the browser is not told it shares a device. Screenshots were looked at: the upright Together scene seats 51 in rows of five with readable names.
+
+**Not covered by this harness:** media. The clients carry signalling only, not 50 encoders. The socket media path at scale needs real encoders, and is measured in §6bl and §6bm with a few browsers.

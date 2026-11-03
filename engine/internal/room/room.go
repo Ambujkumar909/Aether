@@ -35,6 +35,10 @@ type Participant struct {
 	// Energy is the smoothed speech energy driving speaker ranking.
 	Energy float64
 
+	// allowances: this person's buckets, one per kind of relayed frame
+	// (Allowed). They go when the person does.
+	allowances [numAllowances]capBucket
+
 	// Meter is this participant's byte ledger, a child of the room meter.
 	Meter *ledger.Meter
 
@@ -494,7 +498,13 @@ func (rg *Registry) Occupancy(id string) int {
 }
 
 // Reap removes empty rooms older than minAge, returning how many went.
-func (rg *Registry) Reap(minAge time.Duration) int {
+//
+// gone, if set, is called for each one while the registry is still locked:
+// the gateway drops the room's media router there. Called after unlocking,
+// somebody joining the same name in between would create a fresh room and
+// be handed the old router just as it was stopped. Under the lock, they wait
+// a moment and get a fresh router too.
+func (rg *Registry) Reap(minAge time.Duration, gone func(id string)) int {
 	rg.mu.Lock()
 	defer rg.mu.Unlock()
 	n := 0
@@ -503,6 +513,9 @@ func (rg *Registry) Reap(minAge time.Duration) int {
 		// breakout state is what brings them back.
 		if r.Size() == 0 && time.Since(r.Created) > minAge && !r.BreakoutsOpen() {
 			delete(rg.rooms, id)
+			if gone != nil {
+				gone(id)
+			}
 			n++
 		}
 	}
