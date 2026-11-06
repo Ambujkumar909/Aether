@@ -3081,7 +3081,7 @@ async function sendOutline() {
 // The scene, flat, in the app's neutrals: a wall, and in front of each row a
 // desk the people sit behind.
 const TOG_LOOK = [
-  { wall: '#1b2330', floor: '#141a22', tier: '#202a37', desk: '#2b3440', edge: '#3a4654' }, // auditorium
+  { wall: '#18201d', floor: '#121915', tier: '#1d2723', desk: '#27322d', edge: '#35423c' }, // auditorium, in the room's pine and stone
   { wall: '#2e2822', floor: '#211c18', tier: '#2a231d', desk: '#4a3b2e', edge: '#5c4a3a' }, // café
   { wall: '#1d2a30', floor: '#151e22', tier: '#1a252b', desk: '#33444c', edge: '#41565f' }, // conference room
 ];
@@ -3479,13 +3479,17 @@ function renderChatTo() {
   const input = $('chat-input');
   if (input) {
     const who = others.find((p) => p.userId === state.chatTo);
-    input.placeholder = who
-      ? `Message ${who.name}… (kept after the call)`
+    // The prompt is short enough for a phone's panel; whether the chat
+    // outlives the call is the box's tooltip.
+    const [prompt, note] = who
+      ? [`Message ${who.name}`, 'Kept after the call']
       : state.meetingConv?.convId
-        ? 'Message the meeting… (kept after it ends)'
+        ? ['Message the meeting', 'Kept after the meeting ends']
         : oneToOne
-          ? 'Message here… (ends with the call)'
-          : 'Message everyone…';
+          ? ['Message here', 'Ends with the call']
+          : ['Message everyone', ''];
+    input.placeholder = prompt;
+    input.title = note;
   }
   // Which chat is chosen changed under the log (the roster arrived, or the
   // other person left): draw the chat now chosen. Without this the tab said
@@ -3540,7 +3544,7 @@ function renderPersistent(log, messages, emptyText) {
       return `<div class="msg ${mine ? 'mine' : ''}">
         <span ${avatarAttrs(face)}>${esc(initials(face))}</span>
         <div class="msg-body">
-          <div class="msg-who">${esc(name)} · ${esc(clockHM(new Date(m.createdAt)))}</div>
+          <div class="msg-who"><span class="mw-name">${esc(name)}</span><span class="mw-time">${esc(clockHM(new Date(m.createdAt)))}</span></div>
           ${m.deleted ? '<div class="bubble gone">Message deleted</div>' : `<div class="bubble${isOnlyEmoji(m.body) ? ' jumbo' : ''}">${esc(m.body)}</div>`}
         </div>
       </div>`;
@@ -3585,7 +3589,7 @@ function renderChat() {
       return `<div class="msg ${mine ? 'mine' : ''}">
         <span ${avatarAttrs(who)}>${esc(initials(who))}</span>
         <div class="msg-body">
-          <div class="msg-who">${esc(name)} · ${esc(clockHM(new Date(m.at)))}</div>
+          <div class="msg-who"><span class="mw-name">${esc(name)}</span><span class="mw-time">${esc(clockHM(new Date(m.at)))}</span></div>
           <div class="bubble${isOnlyEmoji(m.text) ? ' jumbo' : ''}">${esc(m.text)}</div>
         </div>
       </div>`;
@@ -3619,9 +3623,9 @@ function renderDirect(log) {
       return `<div class="msg ${mine ? 'mine' : ''}">
         <span ${avatarAttrs(face)}>${esc(initials(face))}</span>
         <div class="msg-body">
-          <div class="msg-who">${esc(name)} · ${esc(
+          <div class="msg-who"><span class="mw-name">${esc(name)}</span><span class="mw-time">${esc(
             clockHM(new Date(m.createdAt))
-          )}</div>
+          )}</span></div>
           <div class="bubble${isOnlyEmoji(m.body) ? ' jumbo' : ''}">${esc(m.body)}</div>
         </div>
       </div>`;
@@ -3953,6 +3957,9 @@ function syncControls() {
   $('leave-menu')?.classList.toggle('has-caret', !!state.isHost);
   $('mic-icon')?.setAttribute('href', state.mic ? '#i-mic' : '#i-mic-off');
   $('cam-icon')?.setAttribute('href', state.cam ? '#i-cam' : '#i-cam-off');
+  // The console key says so too, not only its icon: a muted mic is a red key.
+  $('btn-mic')?.classList.toggle('off', !state.mic);
+  $('btn-cam')?.classList.toggle('off', !state.cam);
 
   const pip = $('btn-pip');
   if (pip) {
@@ -6620,8 +6627,8 @@ function paintHero() {
     </div>
     <h2>${esc(m.title)}</h2>
     <p class="next-meta">
-      ${esc(dayLabel(m.start))} · ${esc(clockHM(m.start))} – ${esc(clockHM(m.end))}
-      · ${esc(humanDuration(Math.round((m.end - m.start) / 60000)))}
+      ${esc(dayLabel(m.start))}, ${esc(clockHM(m.start))} – ${esc(clockHM(m.end))}
+      (${esc(humanDuration(Math.round((m.end - m.start) / 60000)))})
     </p>
     <div class="next-people">
       ${invitees

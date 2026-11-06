@@ -124,7 +124,7 @@ try {
   // Start an instant meeting and join it.
   await page.evaluate(() => document.querySelector('[data-home="meet"]')?.click());
   await sleep(400);
-  await page.evaluate(() => document.getElementById('next-start')?.click());
+  await page.evaluate(() => document.getElementById('q-new')?.click()); // always there; 'Start a meeting' only when the calendar is clear
   await page.waitForFunction(() => getComputedStyle(document.getElementById('prejoin')).display !== 'none', { timeout: 15000 });
   await sleep(600);
   const tJoin = performance.now();

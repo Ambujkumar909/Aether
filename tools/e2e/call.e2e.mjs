@@ -133,6 +133,14 @@ const inMeeting = (page) => until(page, () => getComputedStyle(document.getEleme
 try {
   const pageA = await signedIn(accounts.A, 'A');
   const pageB = await signedIn(accounts.B, 'B');
+  // The history B should see the moment B is in the call: made here, so the
+  // check does not depend on another harness having run first.
+  await pageA.evaluate(async (email) => {
+    const api = await import('/src/api.js');
+    const conv = await api.messaging.openDirect(email);
+    await api.messaging.send(conv.id, 'Before the call: the agenda is in the doc.');
+  }, accounts.B.email);
+  await sleep(600);
   // A opens the chat with B and rings from the header's call button.
   await pageA.evaluate(() => document.querySelector('[data-home="chat"]')?.click());
   await sleep(700);

@@ -5258,3 +5258,73 @@ Both tests failed under mutation (`tools/mutate.py`).
 stopped when the machine ran short of memory: the server and 300 pion
 clients share 24 GB. The load client also holds a pion connection per person,
 and at 300 that, not the server, is likely the limit.
+
+### 6bw. The console redesign, and what reading every screen found
+
+The meeting bar was Teams' composition: a row of icon-over-label panel
+buttons, then Camera, Mic, Share and a Leave pill at the far right. It is now
+three zones on one line: the room (clock, title) at the left edge, the
+console (Mic, Camera and Share as split keycaps, then Leave) centred on the
+bar, and the panel keys (Chat, People, Q&A, Notes, then Raise, React, Layout,
+Rooms, More) as icon keys at the right edge. The room is dark in either
+workspace theme; the workspace is pine and stone. The left sidebar stays (a
+top navigation bar was tried and taken back at the user's request); on a
+phone it is the named bottom bar, and in the Windows app it still folds from
+the title bar, remembered per machine, sliding as before.
+
+**Measured, not assumed.** `tools/e2e/console.e2e.mjs` measures the bar at
+1920, 1440, 1280, 1180, 1100, 1024, 900 and 760 px and on a phone. Its first
+run failed: the labelled console is 517 px and the nine panel keys 409 px, so
+the two fit side by side only from about 1,420 px; at 1280 the panel keys ran
+44 px into the console, and at 1024 and 760, 73 px. Below 1,440 px Q&A, Notes
+and Rooms now fold into More (the mechanism the phone already had), and below
+1,024 px the console centres between the two zones instead of on the bar,
+because two equal side tracks no longer fit. The layout harness then caught
+the panel keys at 40 px on a touch tablet; touch gets 44.
+
+**Reading, not only measuring.** `tools/e2e/visual.e2e.mjs` walks three people
+through the stage, a 24-message meeting chat read at its top and bottom, every
+panel, the menus, a raised hand, a presentation from the presenter's side and
+a viewer's, and the workspace in both themes, at phone, tablet and desktop. In
+each state it fails on clipped text, text under 4.5:1 (3:1 large) composited
+through every translucent layer to what is really behind it, icons under 3:1,
+covered keys and page overflow, and saves the picture. Looking at the pictures
+found what the numbers had not yet been taught to see, and each became a check:
+
+| Found | Cause | Now |
+|---|---|---|
+| "Turn on live captions", "Meeting info", "Pop out" drawn as blank rows in More | the rule hiding icon keys' labels also hid labels inside More's menu (on phones since before this change) | scoped to `.mb-btn`; every row of every menu must show its words |
+| A long link or unbroken word ran out of its chat bubble and was cut at the panel edge | the stage's chat toasts share the class `.bubble`; their `all: unset` stripped the chat bubbles' wrapping | toasts scoped to `.bubbles > .bubble`; words may not run past the box that clips them |
+| The filmstrip covered the right of a presented slide (the bottom, on a phone) | speaker mode drew the content full-bleed under the strip | content sits beside the strip; no tile may overlap the content |
+| The meeting chat box showed "Message t" | the recipient picker took the row | picker on its own row; prompt shortened, the "kept after it ends" note moved to the tooltip; the whole prompt must fit |
+| White on the dark theme's red, 3.2:1 | `--danger` doubles as a fill | `--danger-fill` for fills that carry words |
+| The folded sidebar's five buttons were still reachable by Tab | clipped, not hidden | hidden while folded |
+
+Every check above was proven able to fail: each fault was put back in a
+scratch copy of `web/` served by the same binary, the harness failed on it
+(the menu rows at both widths; 9 clipped-text and 9 covered-content failures;
+39 icon failures for a dim `--room-dim`; 24 for a pale `--ink-3`), and passed
+on the real source.
+
+Two more came from looking at the regenerated product screenshots, and became
+checks the same way: the filmstrip's name plates sat on the avatars of people
+with their cameras off (the placeholder centred the face in the whole tile;
+now in the room above the plate; a plate may not cover a face), and the
+calendar's Internal and Business blocks carried white words on light sage and
+coral, 2.89:1 (now dark words on those two fills, 5.49 and 5.94:1; the audit
+seeds a meeting in each fill so the calendar is read with its blocks). The
+breakout-rooms icon was a grid beside the layout grid; it is a room branching
+into two.
+
+**The run that closed it**, on release builds (`-trimpath -ldflags "-s -w"`)
+of the server and the Windows app, served with `-tls -secure-cookies` and no
+`-dev`: `go vet` clean, every command builds, the Go suite passes under
+`-race`, 220 client unit tests, and 28 browser harnesses each against a fresh
+server process: console 116 checks, visual 353, layout 404, layout in the
+Windows shell 228, recording 43 (with a bootstrap administrator), and video,
+audio, share, mute, call, spotlight, controls, roles, live, livestatus,
+messaging, breakout, qna, notes, whiteboard, together, effects, health,
+endnotice, coorg, teams and activity. Four harnesses had leant on state left
+by another one (chat history that existed, a calendar that was empty, a
+presence class that was already there before the push); each now makes or
+waits for its own.

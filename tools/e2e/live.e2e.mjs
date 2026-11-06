@@ -232,7 +232,8 @@ try {
 
   // 3. My own corner follows my pick, on the same device that picked it.
   await A.req('PUT', '/api/messaging/status', { status: 'busy', note: 'corner check' });
-  const corner = await until(pageA, () => document.querySelector('#top-avatar')?.closest('.av-wrap')?.querySelector('.presence')?.className ?? null, null, 5000);
+  // Wait for the change itself: any class at all is there before the push lands.
+  const corner = await until(pageA, () => { const c = document.querySelector('#top-avatar')?.closest('.av-wrap')?.querySelector('.presence')?.className ?? ''; return /pi-busy/.test(c) ? c : null; }, null, 5000);
   ok(!corner.timedOut && /pi-busy/.test(corner.v), `A's own corner glyph shows busy ${corner.ms} ms after the pick (${corner.v})`);
 
   // 4. The peer's header line follows their pick.
@@ -242,7 +243,7 @@ try {
   ok(!headerText.timedOut, `A's header shows B's new state ${headerText.ms} ms after B's pick ("${headerText.v}")`);
   void header;
   // and the row in the list
-  const row = await until(pageA, () => [...document.querySelectorAll('.conv-row .conv')].find((r) => r.textContent.includes('E2E B') && !r.textContent.includes(' and '))?.querySelector('.presence')?.className ?? null, null, 3000);
+  const row = await until(pageA, () => [...document.querySelectorAll('.conv-row .conv')].find((r) => r.textContent.includes('E2E B') && !r.textContent.includes(' and '))?.querySelector('.presence')?.className ?? '', null, 3000).then(() => until(pageA, () => { const c = [...document.querySelectorAll('.conv-row .conv')].find((r) => r.textContent.includes('E2E B') && !r.textContent.includes(' and '))?.querySelector('.presence')?.className ?? ''; return /pi-dnd/.test(c) ? c : null; }, null, 3000));
   ok(!row.timedOut && /pi-dnd/.test(row.v), `and B's row glyph is dnd (${row.v})`);
 
   await A.req('PUT', '/api/messaging/status', { status: 'available' });

@@ -144,6 +144,9 @@ function auditInPage(touch) {
     const targets = [...document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role="button"], [role="tab"], [role="menuitem"]')];
     for (const el of targets) {
       if (!isVisible(el)) continue;
+      // A link inside a message's words is text, not a control: WCAG 2.5.8
+      // exempts inline targets, and padding it to 44 px would break the line.
+      if (el.matches('.bubble a, .msg-text a')) continue;
       const r = el.getBoundingClientRect();
       // Off-screen or inside a hidden panel does not count.
       if (r.bottom < 0 || r.top > innerHeight) continue;
@@ -316,7 +319,7 @@ const SCREENS = [
     go: async (page) => {
       await page.evaluate(() => document.querySelector('[data-home="meet"]')?.click());
       await sleep(500);
-      await page.evaluate(() => document.getElementById('next-start')?.click());
+      await page.evaluate(() => document.getElementById('q-new')?.click()); // always there; 'Start a meeting' only when the calendar is clear
       await page.waitForFunction(() => getComputedStyle(document.getElementById('prejoin')).display !== 'none', { timeout: 15000 });
       await sleep(900);
     },
