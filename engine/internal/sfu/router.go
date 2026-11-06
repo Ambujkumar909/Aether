@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aether-rtc/aether/internal/ledger"
@@ -35,6 +36,8 @@ type Router struct {
 
 	// Permit gates every fan-out. See MayForward.
 	Permit MayForward
+
+	waking atomic.Bool // a wake rebind is pending (wake)
 }
 
 func NewRouter(roomID string, meter *ledger.Meter, log *slog.Logger, ice []webrtc.ICEServer, addrs *AddressPolicy, media *MediaTransport) *Router {
@@ -204,6 +207,8 @@ func (r *Router) MarkScreenTrack(peerID, trackID string) {
 type Signalling struct {
 	SendSDP func(dir Direction, isOffer bool, body string)
 	SendICE func(dir Direction, candidate string)
+	// SendSlots tells the receiver what each of its media slots carries.
+	SendSlots func([]SlotBinding)
 }
 
 func (r *Router) AddPeer(id string, sig Signalling) (*Peer, error) {
@@ -228,6 +233,7 @@ func (r *Router) AddPeer(id string, sig Signalling) (*Peer, error) {
 
 	p.SendSDP = sig.SendSDP
 	p.SendICE = sig.SendICE
+	p.SendSlots = sig.SendSlots
 	p.SetOnPublish(func(t *PublishedTrack) { r.onPublish(t) })
 
 	r.mu.Lock()
@@ -288,6 +294,8 @@ func (r *Router) RemovePeer(id string) {
 
 // onPublish fans a newly published track out to every other participant.
 func (r *Router) onPublish(t *PublishedTrack) {
+	wake := r.wake
+	t.onWake.Store(&wake)
 	r.mu.Lock()
 	r.tracks[t.ID] = t
 	others := make([]*Peer, 0, len(r.peers))
@@ -351,9 +359,34 @@ func (r *Router) SetViewport(peerID, trackID string, w, h int, visible, pinned b
 	}
 	d, ok := p.Downstreams()[trackID]
 	if !ok {
+		// Not a track this receiver has: the client names each person's
+		// tile by participant id too, which is how a camera it has not been
+		// sent yet can be asked for (slots.go).
+		p.SetPersonView(trackID, w, h, visible, pinned)
 		return
 	}
 	d.SetViewport(w, h, visible, pinned)
+}
+
+// wake re-binds every receiver's slots when a microphone starts sending, so
+// the first words are heard rather than the ones a second later. Coalesced:
+// a room where several people start at once rebinds once.
+func (r *Router) wake(*PublishedTrack) {
+	if !r.waking.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		r.waking.Store(false)
+		r.mu.RLock()
+		peers := make([]*Peer, 0, len(r.peers))
+		for _, p := range r.peers {
+			peers = append(peers, p)
+		}
+		r.mu.RUnlock()
+		for _, p := range peers {
+			p.rebind()
+		}
+	}()
 }
 
 // SetSpeakerRank propagates the room's speaker ranking into the media plane,
@@ -413,6 +446,7 @@ func (r *Router) allocateAll() {
 	r.mu.RUnlock()
 
 	for _, p := range peers {
+		p.rebind()
 		r.allocatePeer(p, tracks)
 	}
 }
@@ -429,8 +463,8 @@ func (r *Router) allocatePeer(p *Peer, tracks map[string]*PublishedTrack) {
 
 	for tid, d := range downs {
 		t, ok := tracks[tid]
-		if !ok {
-			continue
+		if !ok || d.Slot() == "" {
+			continue // only what a slot carries is sent at all
 		}
 		// Audio is not layered and is not subject to the video budget; it is
 		// small, it is the thing people actually cannot do without, and
@@ -438,7 +472,7 @@ func (r *Router) allocatePeer(p *Peer, tracks map[string]*PublishedTrack) {
 		if t.Kind != webrtc.RTPCodecTypeVideo {
 			continue
 		}
-		w, h, visible, pinned, rank := d.Viewport()
+		w, h, visible, pinned, rank := p.effectiveView(d)
 		subs = append(subs, Subscription{
 			TrackID:       tid,
 			Layers:        t.Layers(),
@@ -455,6 +489,7 @@ func (r *Router) allocatePeer(p *Peer, tracks map[string]*PublishedTrack) {
 		return
 	}
 
+	p.probeIfQuiet(time.Now())
 	budget := Budget{
 		EstimateBps:   p.EstimateRate(),
 		HeadroomRatio: 0.15,
@@ -491,6 +526,10 @@ type RouterStats struct {
 type DownstreamStat struct {
 	Subscriber string `json:"subscriber"`
 	Track      string `json:"track"`
+	Slot       string `json:"slot"`
+	Target     string `json:"target"`  // the layer being switched to, if any
+	Waiting    bool   `json:"waiting"` // waiting on a keyframe
+	KeyWaits   uint64 `json:"keyframeWaits"`
 	Publisher  string `json:"publisher"`
 	Layer      string `json:"layer"`
 	Packets    uint64 `json:"packets"`
@@ -517,16 +556,21 @@ func (r *Router) Stats() RouterStats {
 	for _, p := range peers {
 		st.Estimates[p.ID] = p.EstimateRate()
 		for tid, d := range p.Downstreams() {
+			if d.Slot() == "" {
+				continue // only what is being sent; the rest is N^2 of nothing
+			}
 			t := tracks[tid]
 			pub := ""
 			if t != nil {
 				pub = t.PeerID
 			}
-			w, h, visible, _, _ := d.Viewport()
-			pkts, sw, _ := d.Stats()
+			w, h, visible, _, _ := p.effectiveView(d)
+			pkts, sw, kw := d.Stats()
+			target, waiting := d.Pending()
 			st.Feeds = append(st.Feeds, DownstreamStat{
-				Subscriber: p.ID, Track: tid, Publisher: pub,
+				Subscriber: p.ID, Track: tid, Publisher: pub, Slot: d.Slot(),
 				Layer:   d.Current().String(),
+				Target:  target.String(), Waiting: waiting, KeyWaits: kw,
 				Packets: pkts, Switches: sw,
 				ViewportW: w, ViewportH: h, Visible: visible,
 			})

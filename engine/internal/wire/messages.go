@@ -384,6 +384,53 @@ func (v *Viewport) Encode(w *Writer) {
 	}
 }
 
+// SlotEntry is one of a receiver's media slots and what it carries now. An
+// empty Publisher means the slot is idle.
+type SlotEntry struct {
+	Slot      string // the slot's track id on the receiver's connection
+	Publisher string // participant id
+	Track     string // the published track id, as the receiver's views name it
+}
+
+// Slots is the whole slot map of one receiver.
+//
+// A receiver has a fixed pool of outgoing tracks (sfu/slots.go), re-pointed at
+// whichever cameras it has on screen and whoever is talking, so the number of
+// tracks per receiver is bounded however large the meeting. This frame names
+// what each slot carries. The whole map travels each time: it is at most a
+// few dozen entries, strings are interned after first use, and a receiver
+// that missed one update is corrected by the next instead of drifting.
+//
+//	ENCODED: 3 bytes of framing plus ~3 bytes per slot once ids are interned.
+type Slots struct {
+	Entries []SlotEntry
+}
+
+// MaxSlotEntries bounds a decoded slot map: more than any pool holds.
+const MaxSlotEntries = 256
+
+func (s *Slots) Encode(w *Writer) {
+	w.WriteHeader(OpSlots, 0, false)
+	w.Uvarint(uint64(len(s.Entries)))
+	for _, e := range s.Entries {
+		w.Str(e.Slot)
+		w.Str(e.Publisher)
+		w.Str(e.Track)
+	}
+}
+
+func (s *Slots) Decode(r *Reader) error {
+	n, ok := r.ReadLen(MaxSlotEntries)
+	if !ok {
+		return r.Err()
+	}
+	s.Entries = make([]SlotEntry, 0, n)
+	for range n {
+		s.Entries = append(s.Entries, SlotEntry{Slot: r.Str(), Publisher: r.Str(), Track: r.Str()})
+	}
+	return r.Err()
+}
+
 func (v *Viewport) Decode(r *Reader) error {
 	// A client cannot be painting more tiles than a room may hold, and the
 	// count is validated before narrowing so an enormous one cannot arrive as

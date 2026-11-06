@@ -214,6 +214,10 @@ const (
 	// OpActivity: the activity feed on the chat socket (messaging/activity.go):
 	// a new item, ids that became read, an item taken back.
 	OpActivity Op = 0x129
+
+	// OpSlots: server to one receiver, what each of its WebRTC media slots is
+	// carrying (sfu/slots.go). Sent whenever a slot is re-pointed.
+	OpSlots Op = 0x12a
 )
 
 var ErrBadVersion = errors.New("wire: unsupported protocol version")

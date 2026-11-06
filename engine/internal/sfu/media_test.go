@@ -33,6 +33,9 @@ type client struct {
 	perTrack sync.Map // string -> *atomic.Int64
 	// extSeen counts received packets that still carried a header extension.
 	extSeen atomic.Int64
+	// slotTrack is the slot map the server sent: slot id -> published track
+	// id, so packets are counted against what the slot carries now.
+	slotTrack sync.Map
 }
 
 // packetsOf is how many packets of trackID this client has received.
@@ -120,7 +123,12 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 		}
 	}
 
-	peer, err := r.AddPeer(id, Signalling{SendSDP: sendSDP, SendICE: sendICE})
+	sendSlots := func(bs []SlotBinding) {
+		for _, b := range bs {
+			c.slotTrack.Store(b.Slot, b.Track)
+		}
+	}
+	peer, err := r.AddPeer(id, Signalling{SendSDP: sendSDP, SendICE: sendICE, SendSlots: sendSlots})
 	if err != nil {
 		t.Fatalf("AddPeer(%s): %v", id, err)
 	}
@@ -145,8 +153,7 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 		case c.gotTrack <- struct{}{}:
 		default:
 		}
-		v, _ := c.perTrack.LoadOrStore(tr.ID(), new(atomic.Int64))
-		n := v.(*atomic.Int64)
+		slotID := tr.ID()
 		go func() {
 			for {
 				pkt, _, err := tr.ReadRTP()
@@ -157,7 +164,12 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 					c.extSeen.Add(1)
 				}
 				c.received.Add(1)
-				n.Add(1)
+				key := slotID
+				if v, ok := c.slotTrack.Load(slotID); ok && v.(string) != "" {
+					key = v.(string)
+				}
+				v, _ := c.perTrack.LoadOrStore(key, new(atomic.Int64))
+				v.(*atomic.Int64).Add(1)
 			}
 		}()
 	})

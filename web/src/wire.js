@@ -94,6 +94,7 @@ export const Op = {
   Whiteboard: 0x127,
   Together: 0x128,
   Activity: 0x129,
+  Slots: 0x12a,
 };
 
 // Which of the two peer connections a signalling frame concerns.
@@ -561,6 +562,19 @@ export function decodeSDP(r) {
   const isOffer = r.bool();
   r.bits(6);
   return { dir, isOffer, body: new TextDecoder().decode(r.blob()) };
+}
+
+// What each of this receiver's WebRTC media slots carries (engine sfu/slots.go):
+// [{ slot, publisher, track }], publisher '' for an idle slot. The whole map
+// every time, so a missed update is corrected by the next.
+export function decodeSlots(r) {
+  const n = r.uvarint();
+  if (r.err || n > 256) return [];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({ slot: r.str(), publisher: r.str(), track: r.str() });
+  }
+  return out;
 }
 
 export function encodeICE(w, { dir, candidate }) {

@@ -5178,3 +5178,83 @@ Next: a bounded send queue per receiver (one writer each, so dispatch only
 hands off and a lagging receiver drops its own frames); then a fixed pool of
 video slots per receiver, re-pointed at whatever is on screen without
 renegotiating, and a small pool for the loudest speakers' audio.
+
+### 6bv. Media slots: a receiver's tracks are bounded, however large the meeting
+
+§6bu found two structural limits past 50 people. Both are now addressed.
+
+**One writer per receiver** (`sfu/sendqueue.go`). A publisher's read loop
+used to send to every subscriber itself. Now it hands each forwarded packet to
+the receiver's own queue (512 packets, about half a second) and moves on. A
+full queue drops the packet and counts it. One slow receiver no longer delays
+anyone else on the track. The test checks that handing a packet to a stuck
+receiver never waits, and that every close path is safe.
+
+**Slots** (`sfu/slots.go`). Each receiver has a pool of outgoing tracks:
+
+| Pool | Cap | Notes |
+|---|---|---|
+| Video | 49 per codec | a 7×7 gallery |
+| Audio | 6 | only for microphones that sent something in the last 2 s |
+| Video, before the receiver's first report | 9 (a first page) | |
+
+How it works:
+
+- **Subscriptions stay cheap.** Every track in the room still gets a
+  `Downstream` per receiver, recording viewport, pin and speaker rank. Only
+  wanted tracks hold a slot.
+- **Binding order** is pinned, then screen share, then speaker rank, then
+  "already holds a slot", then most recent audio, then track id. That is a
+  total order, so two cycles never disagree.
+- **Re-pointing a slot never renegotiates.** It is the forwarder's resume
+  (§6bu): the slot re-anchors on the new camera's next key frame, one past the
+  last sequence number it sent.
+- **Off-screen tiles keep their slots** until something visible needs one.
+  Scrolling back is instant.
+- **Visibility before a slot exists.** A receiver can't report a track by id
+  until it has the track. It reports each person's tile instead, as the
+  browser already did for the socket media path.
+- **The slot map.** A `Slots` frame (`OpSlots`, 0x12a) gives the whole map:
+  about 3 bytes per slot once ids are interned. The client registers each
+  slot's media under the published track id it carries (`applySlot` in
+  `app.js`), so rendering, screen detection, viewport reports and key-frame
+  requests work unchanged.
+- **Safety.** A slot writes only for its current owner, under the slot's
+  lock, so a camera that just lost the slot can never leak a packet into the
+  next camera's stream.
+
+**Measured.**
+
+| | before slots | with slots |
+|---|---|---|
+| 50 people over WebRTC: tracks per receiver | 49 video + 3 audio, plus every track ever published | 49 video + 2–3 audio |
+| 50 people: on-screen cameras stalled / talkers unheard | 0 / 0 | 0 / 0 |
+| 50 people: latency p99, video / audio | — | 11.6 ms / 7.8 ms |
+| Chrome, two people (`video.e2e`), 3 runs each | 720p in 1 of 3 | 720p in 3 of 3, 20 fps |
+| Chrome harnesses: video, audio, share (3 people), mute, call, spotlight | pass | pass |
+
+**Found along the way:** `Unsubscribe` never removed the pion sender. Every
+track of every departed publisher stayed in each remaining receiver's
+connection. A slot now goes back to the pool instead.
+
+**At 100 the first slot run failed. Every camera stalled and every talker
+went unheard. That was two defects, both fixed and tested:**
+
+1. **Join burst.** Before its first report, a receiver had every camera
+   assumed visible, so it was sent up to 49 at once: about 400 Mbit/s into
+   the load client's 100 receivers. They fell 20 s behind and reported the
+   backlog as loss, which drove every estimate to the 80 kbit/s floor. Now a
+   receiver gets the first page (9 cameras) until it reports.
+2. **The floor was a trap.** At 80 kbit/s not even the cheapest layer of nine
+   tiles fits, so every tile was paused. A paused tile sends nothing, so no
+   receiver report ever came to raise the estimate again: in a quiet meeting,
+   video would stay black for good. Now silence counts as a clean report.
+   After 2 s with none, the estimate climbs, but only below the 1.5 Mbit/s
+   starting point.
+
+Both tests failed under mutation (`tools/mutate.py`).
+
+**Not yet measured:** 100, 200 and 300 with both fixes. The 300-person run was
+stopped when the machine ran short of memory: the server and 300 pion
+clients share 24 GB. The load client also holds a pion connection per person,
+and at 300 that, not the server, is likely the limit.

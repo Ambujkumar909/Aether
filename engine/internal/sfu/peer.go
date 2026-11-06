@@ -97,6 +97,23 @@ type Peer struct {
 	// renegotiation per track would produce five offers where one suffices.
 	neg negGate
 
+	// out is this receiver's outbound writer: every forwarded packet goes
+	// through it, so publishers never wait on a receiver.
+	out *sendQueue
+
+	// The slot pool (slots.go). bindMu serialises rebinding; slotMu guards
+	// the pool, the person views and the id counter.
+	bindMu     sync.Mutex
+	slotMu     sync.Mutex
+	slots      map[string][]*slot // kind/mime -> slots
+	slotSeq    int
+	views      map[string]view // participant id -> their tile, as reported
+	slotsDirty atomic.Bool     // a slot was released since the last map sent
+	kicking    atomic.Bool     // a rebind is scheduled (kick)
+
+	// SendSlots tells the receiver what each slot carries. Must not block.
+	SendSlots func([]SlotBinding)
+
 	closed atomic.Bool
 }
 
@@ -135,8 +152,10 @@ func NewPeer(id, roomID string, meter *ledger.Meter, ice []webrtc.ICEServer, log
 		Log: log,
 		ID:  id, RoomID: roomID,
 		pub: pub, sub: sub,
+		out:         newSendQueue(),
+		slots:       make(map[string][]*slot),
 		Meter:       meter,
-		Estimator:   NewEstimator(DefaultConfig(), 1_500_000),
+		Estimator:   NewEstimator(DefaultConfig(), initialEstimate),
 		downstreams: make(map[string]*Downstream),
 		published:   make(map[string]*PublishedTrack),
 	}
@@ -572,50 +591,24 @@ func (p *Peer) offer() {
 // Subscription
 // ---------------------------------------------------------------------------
 
-// Subscribe attaches a published track to this peer's subscriber connection.
+// Subscribe makes this peer a receiver of a published track. It is cheap: a
+// Downstream records what the receiver does with the track, and a slot (an
+// outgoing track on the subscriber connection) is given to it only while it
+// is wanted (slots.go).
 func (p *Peer) Subscribe(t *PublishedTrack) (*Downstream, error) {
 	if t.PeerID == p.ID {
 		// Nobody needs the server to send back their own camera.
 		return nil, nil
 	}
-	// A peer on its way out must not acquire new feeds. Checked before doing
-	// any work, and again under the lock below, because the peer can close
-	// between the two.
 	if p.closed.Load() {
 		return nil, nil
 	}
-	p.mu.Lock()
-	if _, dup := p.downstreams[t.ID]; dup {
-		p.mu.Unlock()
-		return nil, nil
-	}
-	p.mu.Unlock()
-
-	local, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: t.MimeType},
-		t.ID, t.PeerID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create local track: %w", err)
-	}
-	sender, err := p.sub.AddTrack(local)
-	if err != nil {
-		return nil, fmt.Errorf("add track: %w", err)
-	}
-
-	// Drain the sender's RTCP. Not draining it is a slow leak that also
-	// discards the receiver reports the congestion controller needs.
-	go p.readSenderRTCP(sender, t)
-
-	path := ledger.DefaultPath()
-	d := NewDownstream(p.ID, t.ID, local, p.Meter.Child("rx:"+t.ID), path,
+	d := newDownstream(p.ID, t.ID, p.Meter.Child("rx:"+t.ID), ledger.DefaultPath(),
 		ledger.ExtensionsSize(ledger.StandardExtensions))
+	d.track = t
 
 	p.mu.Lock()
-	if p.closed.Load() {
-		// Closed while the track was being created. Drop it rather than
-		// registering a feed nothing will ever tear down; the connection
-		// close below reclaims the sender.
+	if _, dup := p.downstreams[t.ID]; dup || p.closed.Load() {
 		p.mu.Unlock()
 		return nil, nil
 	}
@@ -623,42 +616,8 @@ func (p *Peer) Subscribe(t *PublishedTrack) (*Downstream, error) {
 	p.mu.Unlock()
 
 	t.Subscribe(d)
-
-	// Start on the lowest rung. The allocator promotes within a cycle, and
-	// starting low means the first frame arrives sooner on a cold link.
-	if t.Kind == webrtc.RTPCodecTypeVideo {
-		d.Select(t, LayerQuarter)
-	} else {
-		d.Select(t, LayerFull)
-	}
+	p.kick()
 	return d, nil
-}
-
-// readSenderRTCP consumes feedback from one outbound track.
-func (p *Peer) readSenderRTCP(sender *webrtc.RTPSender, t *PublishedTrack) {
-	buf := make([]byte, 1500)
-	for {
-		n, _, err := sender.Read(buf)
-		if err != nil {
-			return
-		}
-		pkts, err := rtcp.Unmarshal(buf[:n])
-		if err != nil {
-			continue
-		}
-		for _, pkt := range pkts {
-			switch rr := pkt.(type) {
-			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-				// A subscriber wants a keyframe. Pass it upstream, where it
-				// is deduplicated across every subscriber of this track.
-				t.RequestKeyframe(t.SubscribedLayer(p.ID))
-			case *rtcp.ReceiverReport:
-				for _, rep := range rr.Reports {
-					p.observeLoss(float64(rep.FractionLost)/256, time.Now())
-				}
-			}
-		}
-	}
 }
 
 // observeLoss feeds the bandwidth estimator from the receiver reports this
@@ -700,6 +659,29 @@ func (p *Peer) observeLoss(fraction float64, now time.Time) {
 	p.lastEst = now
 }
 
+// probeIfQuiet climbs the estimate when no receiver report has moved it for
+// a while.
+//
+// Reports arrive only for what is being sent. A receiver whose estimate fell
+// until every tile was paused got no more reports, so it stayed at the floor
+// for good: with nobody talking, every camera stayed black (the 100-person
+// WebRTC run, ARCHITECTURE 6bv). Silence is no evidence of congestion, so a
+// quiet spell counts as one clean report. Only below the starting estimate:
+// a receiver that has never been measured is not talked up by silence alone.
+func (p *Peer) probeIfQuiet(now time.Time) {
+	p.estMu.Lock()
+	defer p.estMu.Unlock()
+	if p.lastEst.IsZero() {
+		p.lastEst = now
+		return
+	}
+	if now.Sub(p.lastEst) < quietProbeAfter || p.Estimator.Rate() >= initialEstimate {
+		return
+	}
+	p.Estimator.Update(now, SignalNormal, 0)
+	p.lastEst = now
+}
+
 // EstimateRate is the bandwidth the allocator may spend on this receiver.
 func (p *Peer) EstimateRate() int {
 	p.estMu.Lock()
@@ -711,6 +693,10 @@ const (
 	lossUpdateEvery = 500 * time.Millisecond
 	lossClimb       = 0.02
 	lossBackOff     = 0.10
+	// quietProbeAfter is how long without a receiver report counts as a clean one.
+	quietProbeAfter = 2 * time.Second
+	// initialEstimate is where every receiver's estimate starts, bit/s.
+	initialEstimate = 1_500_000
 )
 
 // Unsubscribe detaches a track from this peer.
@@ -722,7 +708,10 @@ func (p *Peer) Unsubscribe(trackID string) {
 	if !ok {
 		return
 	}
-	_ = d
+	// Its slot goes back to the pool, and someone else on screen may take it.
+	p.release(d)
+	d.track.Unsubscribe(p.ID)
+	p.kick()
 }
 
 // Downstreams returns a snapshot for the allocator.
@@ -772,6 +761,7 @@ func (p *Peer) Close() {
 	clear(p.published)
 	clear(p.downstreams)
 	p.mu.Unlock()
+	p.out.close()
 
 	if p.pub != nil {
 		_ = p.pub.Close()

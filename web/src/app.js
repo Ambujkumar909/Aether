@@ -17,6 +17,7 @@ import {
   decodeSDP,
   encodeICE,
   decodeICE,
+  decodeSlots,
   encodeViewport,
   encodeKeyframeReq,
   encodeMediaFrame,
@@ -226,6 +227,13 @@ const state = {
   screenTrackId: '',
   // trackId -> MediaStream, one per remote video track.
   videoStreams: new Map(),
+  // WebRTC media slots (engine sfu/slots.go): the server re-points a fixed
+  // pool of incoming tracks at whatever this receiver has on screen.
+  // slotTracks: slot id -> MediaStreamTrack; slotMap: slot id -> what the
+  // server says it carries; slotApplied: what is registered for it now.
+  slotTracks: new Map(),
+  slotMap: new Map(),
+  slotApplied: new Map(),
   // Chosen input devices, remembered across pre-join adjustments.
   camDeviceId: '',
   micDeviceId: '',
@@ -841,6 +849,27 @@ function handle(h, r) {
     case Op.Ice:
       state.media?.handleICE(decodeICE(r));
       break;
+    case Op.Slots: {
+      const entries = decodeSlots(r);
+      if (r.err) return;
+      const live = new Set();
+      for (const e of entries) {
+        live.add(e.slot);
+        state.slotMap.set(e.slot, e);
+        applySlot(e.slot);
+      }
+      for (const id of [...state.slotMap.keys()]) {
+        if (!live.has(id)) {
+          state.slotMap.delete(id);
+          applySlot(id);
+        }
+      }
+      renderStage();
+      renderPeople();
+      syncAudioSinks();
+      reportViewport(true);
+      break;
+    }
     default:
       // Unknown opcodes are ignored. A client talking to a newer server
       // degrades rather than disconnecting.
@@ -1079,6 +1108,34 @@ function syncAudioSinks() {
   }
 }
 
+// The stream id every slot track carries (engine sfu.SlotStream).
+const SLOT_STREAM = 'slots';
+
+// Register what a slot carries, as if it were that publisher's own track:
+// video under the published track id (so screen detection, viewport reports
+// and keyframe requests name the same track the server does), audio as the
+// publisher's stream for the audio sinks. A slot re-pointed elsewhere first
+// drops what it was registered as. Needs both the track and its map entry,
+// which can arrive in either order.
+function applySlot(slotId) {
+  const track = state.slotTracks.get(slotId);
+  const want = state.slotMap.get(slotId);
+  const had = state.slotApplied.get(slotId);
+  const same = had && track && want && want.publisher && had.track === want.track;
+  if (had && !same) {
+    state.trackOwner.delete(had.track);
+    if (had.kind === 'video') state.videoStreams.delete(had.track);
+    else if (state.remote.get(had.publisher) === had.stream) state.remote.delete(had.publisher);
+    state.slotApplied.delete(slotId);
+  }
+  if (same || !track || !want || !want.publisher) return;
+  const stream = new MediaStream([track]);
+  state.trackOwner.set(want.track, want.publisher);
+  if (track.kind === 'video') state.videoStreams.set(want.track, stream);
+  else state.remote.set(want.publisher, stream);
+  state.slotApplied.set(slotId, { publisher: want.publisher, track: want.track, kind: track.kind, stream });
+}
+
 async function startMediaPlane() {
   state.media = new MediaPlane(
     {
@@ -1088,6 +1145,23 @@ async function startMediaPlane() {
     {
       onRemoteTrack: (track, stream, publisher) => {
         if (!stream) return;
+        // A slot: what it carries is named by the slot map, not its stream.
+        if (stream.id === SLOT_STREAM) {
+          state.slotTracks.set(track.id, track);
+          track.onended = () => {
+            state.slotTracks.delete(track.id);
+            applySlot(track.id);
+            renderStage();
+            renderPeople();
+            syncAudioSinks();
+          };
+          applySlot(track.id);
+          renderStage();
+          renderPeople();
+          syncAudioSinks();
+          reportViewport(true);
+          return;
+        }
         state.remote.set(publisher, stream);
         state.trackOwner.set(track.id, publisher);
 

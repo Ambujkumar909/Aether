@@ -376,6 +376,13 @@ func (g *Gateway) run(ctx context.Context, c *Conn, roomID, name string) {
 			m := wire.ICE{Dir: wire.Direction(dir), Candidate: cand}
 			c.Emit(func(w *wire.Writer) { m.Encode(w) })
 		},
+		SendSlots: func(bs []sfu.SlotBinding) {
+			m := wire.Slots{Entries: make([]wire.SlotEntry, len(bs))}
+			for i, b := range bs {
+				m.Entries[i] = wire.SlotEntry{Slot: b.Slot, Publisher: b.Publisher, Track: b.Track}
+			}
+			c.Emit(func(w *wire.Writer) { m.Encode(w) })
+		},
 	})
 	if err != nil {
 		g.Log.Error("media plane failed", "id", p.ID, "err", err)

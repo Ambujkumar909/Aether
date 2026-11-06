@@ -825,10 +825,14 @@ try {
       metric('webrtc report', r);
       metric('server cpu during it (cores busy)', cpu0 && cpu1 ? (cpu1.cpuS - cpu0.cpuS) / ((now() - t0r) / 1000) : NaN);
       ok(r.joined === N && r.errors === 0, `all ${N} joined and negotiated without an error (${r.joined} joined, ${r.errors} errors)`);
-      // Three people talking; everyone else muted (a muted browser sends no audio).
-      ok(r.audioTracksPerPerson.every((n, i) => n === r.talkers - (i < r.talkers ? 1 : 0)), `everyone receives every talker's microphone (${r.talkers} talking; per person ${[...new Set(r.audioTracksPerPerson)].join('/')})`);
-      ok(r.videoTracksPerPerson.every((n) => n === N - 1), `everyone is subscribed to the other ${N - 1} cameras (min ${Math.min(...r.videoTracksPerPerson)})`);
-      ok(r.audioStalled === 0, `no microphone stalled at any receiver (${r.audioStalled})`);
+      // Media slots (engine sfu/slots.go): a receiver is sent the cameras it
+      // has on screen and the voices that are talking, through a pool bounded
+      // however large the meeting. Three people talk; a muted browser sends
+      // no audio.
+      const shownN = Math.min(9, N - 1);
+      ok(r.videoSlotsPerPerson.every((n) => n >= shownN && n <= 49), `every receiver's video slots cover what it shows and stay within the 49 cap (${Math.min(...r.videoSlotsPerPerson)}-${Math.max(...r.videoSlotsPerPerson)} for ${N - 1} cameras)`);
+      ok(r.audioSlotsPerPerson.every((n) => n <= 6), `audio slots stay within the cap of 6 (max ${Math.max(...r.audioSlotsPerPerson)})`);
+      ok(r.audioStalled === 0, `every talker is heard by every other receiver (${r.audioStalled} missing)`);
       ok(r.shownCamerasStalled === 0, `no on-screen camera stalled (${r.shownCamerasStalled})`);
       ok(r.hiddenCameraKbpsAvg < r.shownCameraKbpsAvg / 4, `off-screen cameras are held back: ${r.hiddenCameraKbpsAvg.toFixed(1)} kbit/s each against ${r.shownCameraKbpsAvg.toFixed(1)} on screen`);
     }

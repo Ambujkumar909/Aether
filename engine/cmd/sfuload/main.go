@@ -383,18 +383,29 @@ func (c *client) publish(stop <-chan struct{}, talking bool) error {
 }
 
 // telemetryFeeds is the server's view of every forwarded feed, keyed
-// "subscriber|track": layer, switches, visibility, packets.
-func telemetryFeeds(in input) map[string]string {
+// "subscriber|track": layer, switches, visibility, packets. slots says what
+// each receiver's media slots carry, keyed "subscriber|slot".
+//
+// The slot map also reaches every client in a Slots frame, but its strings
+// are interned in the socket's dictionary, and this client skips the frames
+// that define most of them (it decodes only Welcome, SDP and ICE). So it
+// reads the binding from the server's telemetry instead, once the views have
+// settled: a slot re-pointed during the measured window would be credited to
+// where it ended up.
+type binding struct{ publisher, track string }
+
+func telemetryFeeds(in input) (map[string]string, map[string]binding) {
 	out := map[string]string{}
+	slots := map[string]binding{}
 	if in.Admin.Cookie == "" {
-		return out
+		return out, slots
 	}
 	req, _ := http.NewRequest("GET", in.Base+"/api/telemetry", nil)
 	req.Header.Set("Cookie", in.Admin.Cookie)
 	req.Header.Set("X-Forwarded-For", in.Admin.IP)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return out
+		return out, slots
 	}
 	defer res.Body.Close()
 	var t struct {
@@ -404,16 +415,29 @@ func telemetryFeeds(in input) map[string]string {
 		} `json:"media"`
 	}
 	if json.NewDecoder(res.Body).Decode(&t) != nil {
-		return out
+		return out, slots
 	}
 	for _, m := range t.Media {
 		for _, f := range m.Feeds {
 			f["subscriberEstimate"] = m.Estimates[fmt.Sprint(f["subscriber"])]
 			b, _ := json.Marshal(f)
 			out[fmt.Sprint(f["subscriber"])+"|"+fmt.Sprint(f["track"])] = string(b)
+			if sl, _ := f["slot"].(string); sl != "" {
+				slots[fmt.Sprint(f["subscriber"])+"|"+sl] = binding{fmt.Sprint(f["publisher"]), fmt.Sprint(f["track"])}
+			}
 		}
 	}
-	return out
+	return out, slots
+}
+
+// hasPublisher reports whether any of a receiver's slots carries publisher.
+func hasPublisher(slots map[string]binding, sub, publisher string) bool {
+	for k, b := range slots {
+		if b.publisher == publisher && len(k) > len(sub) && k[:len(sub)+1] == sub+"|" {
+			return true
+		}
+	}
+	return false
 }
 
 func pct(xs []float64, p float64) float64 {
@@ -498,16 +522,21 @@ func main() {
 		for k := 1; k <= *shown && k < len(clients); k++ {
 			shownBy[i][ids[(i+k)%len(clients)]] = true
 		}
+		// By participant, as the browser reports a person's tile: the server
+		// gives a slot to the cameras that are on screen.
 		var tiles []wire.Tile
 		reported[i] = map[string]bool{}
-		c.tracks.Range(func(k, v any) bool {
-			t := v.(*track)
-			if t.kind == "video" {
-				tiles = append(tiles, wire.Tile{Track: k.(string), Width: 320, Height: 180, Visible: shownBy[i][t.publisher]})
-				reported[i][k.(string)] = true
+		for j, id := range ids {
+			if j == i || id == "" {
+				continue
 			}
-			return true
-		})
+			w, h := 0, 0
+			if shownBy[i][id] {
+				w, h = 320, 180
+			}
+			tiles = append(tiles, wire.Tile{Track: id, Width: uint32(w), Height: uint32(h), Visible: shownBy[i][id]})
+			reported[i][id] = true
+		}
 		vp := wire.Viewport{Tiles: tiles}
 		c.send(vp.Encode)
 	}
@@ -531,7 +560,7 @@ func main() {
 	cpu0 := processCPU()
 	time.Sleep(time.Duration(*secs) * time.Second)
 	cpu1 := processCPU()
-	feeds := telemetryFeeds(in)
+	feeds, slotOf := telemetryFeeds(in)
 	close(stop)
 	window := float64(*secs)
 
@@ -540,8 +569,8 @@ func main() {
 		Joined        int      `json:"joined"`
 		JoinMs        int64    `json:"joinMs"`
 		Errors        int64    `json:"errors"`
-		VideoTracks   []int    `json:"videoTracksPerPerson"` // tracks received
-		AudioTracks   []int    `json:"audioTracksPerPerson"`
+		VideoTracks   []int    `json:"videoSlotsPerPerson"` // video slots received
+		AudioTracks   []int    `json:"audioSlotsPerPerson"`
 		ShownKbps     float64  `json:"shownCameraKbpsAvg"`  // per on-screen camera
 		HiddenKbps    float64  `json:"hiddenCameraKbpsAvg"` // per off-screen camera
 		ShownStalled  int      `json:"shownCamerasStalled"` // on screen, < 5 packets/s
@@ -549,7 +578,7 @@ func main() {
 		LatSamples    int      `json:"latencySamples"`
 		LatBad        int      `json:"latencyBad"` // < 0 or > 10 s: a stamp misread
 		Heads         []string `json:"heads,omitempty"`
-		AudioStalled  int      `json:"audioStalled"` // < 40 packets/s
+		AudioStalled  int      `json:"audioStalled"` // a talker not heard at 40+ packets/s
 		RecvMbpsP50   float64  `json:"recvMbpsP50"`
 		RecvMbpsMax   float64  `json:"recvMbpsMax"`
 		VideoLatP50   float64  `json:"videoLatencyP50"`
@@ -574,24 +603,27 @@ func main() {
 		o.Errors += c.errs.Load()
 		vt, at := 0, 0
 		var bytes int64
+		heard := map[string]bool{}    // talkers arriving at 40+ packets/s
+		onScreen := map[string]bool{} // shown cameras arriving at 5+ packets/s
 		c.tracks.Range(func(k, v any) bool {
 			t := v.(*track)
 			b := base[i][k.(string)]
 			dp, db := t.packets.Load()-b[0], t.bytes.Load()-b[1]
 			bytes += db
+			who := slotOf[c.id+"|"+k.(string)] // what this slot carries
 			t.latMu.Lock()
+			defer t.latMu.Unlock()
 			if t.kind == "video" {
 				vt++
 				vlat = append(vlat, t.lat...)
 				kbps := float64(db*8) / window / 1000
-				if shownBy[i][t.publisher] {
+				if who.publisher != "" && shownBy[i][who.publisher] {
 					shownSum += kbps
 					shownN++
-					if float64(dp)/window < 5 {
-						o.ShownStalled++
-						if len(o.StalledWhy) < 10 {
-							o.StalledWhy = append(o.StalledWhy, fmt.Sprintf("receiver %d, publisher %s: %d packets, reported %v; server: %s", i, t.publisher, dp, reported[i][k.(string)], feeds[c.id+"|"+k.(string)]))
-						}
+					if float64(dp)/window >= 5 {
+						onScreen[who.publisher] = true
+					} else if len(o.StalledWhy) < 10 {
+						o.StalledWhy = append(o.StalledWhy, fmt.Sprintf("receiver %d, publisher %s, slot %s: %d packets; server: %s", i, who.publisher, k, dp, feeds[c.id+"|"+who.track]))
 					}
 				} else {
 					hiddenSum += kbps
@@ -600,13 +632,25 @@ func main() {
 			} else {
 				at++
 				alat = append(alat, t.lat...)
-				if float64(dp)/window < 40 {
-					o.AudioStalled++
+				if who.publisher != "" && float64(dp)/window >= 40 {
+					heard[who.publisher] = true
 				}
 			}
-			t.latMu.Unlock()
 			return true
 		})
+		for id := range shownBy[i] {
+			if !onScreen[id] {
+				o.ShownStalled++
+				if len(o.StalledWhy) < 10 && !hasPublisher(slotOf, c.id, id) {
+					o.StalledWhy = append(o.StalledWhy, fmt.Sprintf("receiver %d, publisher %s: no slot", i, id))
+				}
+			}
+		}
+		for k := 0; k < o.Talkers; k++ {
+			if k != i && ids[k] != "" && !heard[ids[k]] {
+				o.AudioStalled++
+			}
+		}
 		o.VideoTracks = append(o.VideoTracks, vt)
 		o.AudioTracks = append(o.AudioTracks, at)
 		recv = append(recv, float64(bytes*8)/window/1e6)

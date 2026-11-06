@@ -2,6 +2,7 @@ package sfu
 
 import (
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +39,14 @@ type PublishedTrack struct {
 	mu     sync.RWMutex
 	layers map[LayerID]*inboundLayer
 	subs   map[string]*Downstream
+	outs   atomic.Pointer[[]*Downstream] // subs holding a slot; copy on write
+
+	// lastPacket is when the track last sent anything (unix ns): an audio
+	// track is worth a slot only while its microphone is sending. onWake runs
+	// when it starts again after a quiet spell, so its slots are bound now
+	// rather than at the next allocation cycle, a second of speech later.
+	lastPacket atomic.Int64
+	onWake     atomic.Pointer[func(*PublishedTrack)]
 
 	Meter *ledger.Meter
 
@@ -135,6 +144,12 @@ func (t *PublishedTrack) readLayer(l *inboundLayer) {
 		}
 		l.bytes.Add(int64(len(pkt.Payload)))
 		l.recalc()
+		now := time.Now().UnixNano()
+		if prev := t.lastPacket.Swap(now); now-prev > int64(audioActive) {
+			if wake := t.onWake.Load(); wake != nil {
+				(*wake)(t)
+			}
+		}
 		t.dispatch(l.id, pkt)
 	}
 }
@@ -165,30 +180,55 @@ func (l *inboundLayer) recalc() {
 func (t *PublishedTrack) dispatch(layer LayerID, pkt *rtp.Packet) {
 	kf := t.Kind == webrtc.RTPCodecTypeVideo && IsKeyframe(t.MimeType, pkt.Payload)
 
-	t.mu.RLock()
-	subs := make([]*Downstream, 0, len(t.subs))
-	for _, d := range t.subs {
-		subs = append(subs, d)
+	outs := t.outs.Load() // only the receivers with a slot on this track
+	if outs == nil {
+		return
 	}
-	t.mu.RUnlock()
-
-	for _, d := range subs {
+	for _, d := range *outs {
+		s := d.slot.Load()
+		if s == nil {
+			continue
+		}
 		local := forwardCopy(pkt) // header by value, payload shared
-		if d.fwd.WriteRTP(layer, &local, kf) != Forward {
+		dec, waitL, waiting := s.write(d, layer, &local, kf)
+		if dec != Forward {
 			// Waiting on a keyframe from this layer: ask again (rate-limited
 			// per layer by RequestKeyframe). Keeps asking until one comes.
-			if !kf && t.Kind == webrtc.RTPCodecTypeVideo {
-				if l, waiting := d.fwd.Waiting(); waiting && l == layer {
-					t.RequestKeyframe(l)
-				}
+			if !kf && t.Kind == webrtc.RTPCodecTypeVideo && waiting && waitL == layer {
+				t.RequestKeyframe(waitL)
 			}
 			continue
 		}
-		if err := d.local.WriteRTP(&local); err != nil {
-			continue
-		}
-		d.count(len(local.Payload))
+		s.send(d, local)
 	}
+}
+
+// attach adds d to the receivers dispatch sends to. Copy on write: dispatch
+// runs for every packet and must not allocate or lock to find them.
+func (t *PublishedTrack) attach(d *Downstream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var cur []*Downstream
+	if p := t.outs.Load(); p != nil {
+		cur = *p
+	}
+	if slices.Contains(cur, d) {
+		return
+	}
+	next := append(slices.Clone(cur), d)
+	t.outs.Store(&next)
+}
+
+// detach removes d from the receivers dispatch sends to.
+func (t *PublishedTrack) detach(d *Downstream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := t.outs.Load()
+	if p == nil || !slices.Contains(*p, d) {
+		return
+	}
+	next := slices.DeleteFunc(slices.Clone(*p), func(x *Downstream) bool { return x == d })
+	t.outs.Store(&next)
 }
 
 // forwardCopy is the packet as it leaves for one subscriber: the header by
@@ -290,15 +330,25 @@ func conventionalFPS(id LayerID) float64 {
 // Subscribe attaches a downstream and returns it.
 func (t *PublishedTrack) Subscribe(d *Downstream) {
 	t.mu.Lock()
+	if d.track == nil {
+		d.track = t
+	}
 	t.subs[d.SubscriberID] = d
 	t.mu.Unlock()
+	if d.slot.Load() != nil {
+		t.attach(d)
+	}
 }
 
 // Unsubscribe detaches a downstream.
 func (t *PublishedTrack) Unsubscribe(subscriberID string) {
 	t.mu.Lock()
+	d := t.subs[subscriberID]
 	delete(t.subs, subscriberID)
 	t.mu.Unlock()
+	if d != nil {
+		t.detach(d)
+	}
 }
 
 // SubscribedLayer reports which rung a given subscriber is receiving, or
@@ -341,6 +391,7 @@ func (t *PublishedTrack) Close() {
 	t.closed.Store(true)
 	t.mu.Lock()
 	t.subs = make(map[string]*Downstream)
+	t.outs.Store(nil)
 	t.mu.Unlock()
 }
 
@@ -348,14 +399,18 @@ func (t *PublishedTrack) Close() {
 // Downstream
 // ---------------------------------------------------------------------------
 
-// Downstream is one (published track, subscriber) pair: the outbound track
-// the subscriber sees and the forwarder that keeps it continuous.
+// Downstream is one (published track, subscriber) pair: what the receiver is
+// doing with the track, and the slot carrying it, if any (slots.go).
+//
+// It is the cheap half of a subscription. Every receiver has one for every
+// track in the room; only the ones that are wanted hold a slot, which is the
+// outgoing track and its forwarder.
 type Downstream struct {
 	SubscriberID string
 	TrackID      string
 
-	local *webrtc.TrackLocalStaticRTP
-	fwd   *Forwarder
+	track *PublishedTrack
+	slot  atomic.Pointer[slot] // nil: not being sent
 	meter *ledger.Meter
 
 	// path describes the wire so that byte accounting reflects the real
@@ -373,13 +428,15 @@ type Downstream struct {
 	visible     bool
 	pinned      bool
 	speakerRank int
+	// hasReport: the receiver reported on this track by its id, which it can
+	// only do while a slot carries it. Cleared when the slot is lost, so the
+	// report for the publisher's tile decides again (Peer.effectiveView).
+	hasReport bool
 }
 
-func NewDownstream(subscriberID, trackID string, local *webrtc.TrackLocalStaticRTP,
-	meter *ledger.Meter, path ledger.Path, extBytes int) *Downstream {
+func newDownstream(subscriberID, trackID string, meter *ledger.Meter, path ledger.Path, extBytes int) *Downstream {
 	return &Downstream{
-		SubscriberID: subscriberID, TrackID: trackID,
-		local: local, fwd: newForwarderFor(local.Kind()), meter: meter,
+		SubscriberID: subscriberID, TrackID: trackID, meter: meter,
 		path: path, extBytes: extBytes,
 		// A new subscription is assumed visible at a modest size until the
 		// client says otherwise. Assuming invisible would leave a joiner
@@ -388,11 +445,35 @@ func NewDownstream(subscriberID, trackID string, local *webrtc.TrackLocalStaticR
 	}
 }
 
+// NewDownstream is a subscription with its own private output, permanently
+// bound: for tests that drive a track directly.
+func NewDownstream(subscriberID, trackID string, local *webrtc.TrackLocalStaticRTP,
+	meter *ledger.Meter, path ledger.Path, extBytes int) *Downstream {
+	d := newDownstream(subscriberID, trackID, meter, path, extBytes)
+	s := newSlot(trackID, local.Kind(), "", local, nil)
+	s.owner = d
+	d.slot.Store(s)
+	return d
+}
+
 // SetViewport records what the receiver is painting.
 func (d *Downstream) SetViewport(w, h int, visible, pinned bool) {
 	d.vpMu.Lock()
 	d.viewportW, d.viewportH = w, h
 	d.visible, d.pinned = visible, pinned
+	d.hasReport = true
+	d.vpMu.Unlock()
+}
+
+func (d *Downstream) reported() bool {
+	d.vpMu.RLock()
+	defer d.vpMu.RUnlock()
+	return d.hasReport
+}
+
+func (d *Downstream) forgetReport() {
+	d.vpMu.Lock()
+	d.hasReport = false
 	d.vpMu.Unlock()
 }
 
@@ -411,9 +492,6 @@ func (d *Downstream) Viewport() (w, h int, visible, pinned bool, rank int) {
 	return d.viewportW, d.viewportH, d.visible, d.pinned, d.speakerRank
 }
 
-// Select changes the layer this subscriber receives, requesting a keyframe if
-// the switch needs one.
-
 // newForwarderFor picks the forwarder by media kind. Video waits for
 // keyframes; audio must not, because it has none.
 func newForwarderFor(kind webrtc.RTPCodecType) *Forwarder {
@@ -422,17 +500,42 @@ func newForwarderFor(kind webrtc.RTPCodecType) *Forwarder {
 	}
 	return NewAudioForwarder()
 }
+
+// Select changes the layer this subscriber receives, requesting a keyframe if
+// the switch needs one. Without a slot there is nothing to select.
 func (d *Downstream) Select(t *PublishedTrack, layer LayerID) {
-	if d.fwd.Select(layer) {
+	if s := d.slot.Load(); s != nil && s.selectLayer(d, layer) {
 		t.RequestKeyframe(layer)
 	}
 }
 
 // Current reports the layer being delivered.
-func (d *Downstream) Current() LayerID { return d.fwd.Current() }
+func (d *Downstream) Current() LayerID {
+	if s := d.slot.Load(); s != nil && s.ownerOf() == d {
+		return s.current()
+	}
+	return LayerNone
+}
 
-// Track returns the outbound track, for attaching to a peer connection.
-func (d *Downstream) Track() *webrtc.TrackLocalStaticRTP { return d.local }
+// Pending reports the layer the slot is switching to and whether it is
+// waiting on a keyframe: for telemetry, where a stuck switch shows itself.
+func (d *Downstream) Pending() (LayerID, bool) {
+	if s := d.slot.Load(); s != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		_, waiting := s.fwd.Waiting()
+		return s.fwd.Target(), waiting
+	}
+	return LayerNone, false
+}
+
+// Slot reports the id of the slot carrying this track, or "".
+func (d *Downstream) Slot() string {
+	if s := d.slot.Load(); s != nil {
+		return s.id
+	}
+	return ""
+}
 
 // count books one forwarded packet against the subscriber's ledger, whole
 // stack included. This is the point at which the numbers in the telemetry
@@ -441,7 +544,12 @@ func (d *Downstream) count(payloadLen int) {
 	d.meter.CountRTP(d.path, d.extBytes, payloadLen)
 }
 
-// Stats exposes forwarder counters.
+// Stats exposes the counters of the slot carrying this track.
 func (d *Downstream) Stats() (packets, switches, keyframeWaits uint64) {
-	return d.fwd.Stats()
+	if s := d.slot.Load(); s != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.fwd.Stats()
+	}
+	return 0, 0, 0
 }
