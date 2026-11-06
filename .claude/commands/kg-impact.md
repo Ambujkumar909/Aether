@@ -1,0 +1,1 @@
+Find the node id with `kg_sync.py route "$ARGUMENTS"` or `graphify explain`, then run `graphify affected <id>` in PowerShell. For Go methods also grep for `.Name(` callers: receiver calls are often unresolved.

@@ -16,7 +16,9 @@ tools/e2e/.accounts.json
 node_modules/
 tools/e2e/.shots/
 graphify-out/
+.claude/settings.local.json
 
 # Personal screenshots in the project root.
 /Screenshot *.png
 tools/e2e/.stress/
+__pycache__/

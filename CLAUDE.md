@@ -123,3 +123,26 @@ was designed on.
 
 "Works on desktop" is not done. A screen that is unusable on a phone is a
 bug of the same severity as one that is unusable on a laptop.
+
+## Knowledge graph — route before you read
+
+`graphify-out/graph.json` maps this repo: every function, type, file and doc
+heading, with call/import edges and named communities (AST-extracted by
+graphify, no LLM). It is kept current automatically: the SessionStart hook
+syncs it and injects the last checkpoint; the Stop hook re-indexes changed
+files in the background (`tools/kg/kg_sync.py`, run in PowerShell with
+graphify's interpreter, `graphify-out/.graphify_python`).
+
+Before opening files to find where something lives, route (≈200 ms, ≈450 tokens):
+
+    & (gc graphify-out\.graphify_python) tools\kg\kg_sync.py route "<words or symbol>"
+
+It prints the files to read first with the symbols and line numbers that
+matched, then the files connected by calls/imports. Read only those lines.
+Deeper questions: `graphify explain "<symbol>"`, `graphify query "<question>"`
+(BFS, ~2k tokens), `graphify affected <node-id>` (what depends on it).
+
+Limits, measured: Go calls through a receiver (`s.pushMessage(...)`) are
+often not resolved, so `affected` under-reports for Go methods — grep
+callers before changing a shared method. Docs carry heading nodes only.
+The graph is a map; read the real lines before editing.
