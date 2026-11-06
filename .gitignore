@@ -22,3 +22,4 @@ graphify-out/
 /Screenshot *.png
 tools/e2e/.stress/
 __pycache__/
+/screenshots/

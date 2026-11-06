@@ -271,6 +271,9 @@ const state = {
   // and a message meant to vanish with the call landed in the permanent
   // conversation.
   chatToPicked: false,
+  // Set when chatTo is the automatic two-person choice, so it can be undone
+  // when the meeting stops being two people (renderChatTo).
+  chatToAuto: false,
   // account id -> { convId, messages, unread }
   dms: new Map(),
   // Messages said to the room while the panel was on a private thread.
@@ -525,6 +528,7 @@ function handle(h, r) {
         if (state.chatTo && state.chatTo === state.people.get(e.id)?.userId) {
           state.chatTo = 'everyone';
           state.chatToPicked = false;
+          state.chatToAuto = false;
         }
         state.people.delete(e.id);
         renderChatTo();
@@ -3392,6 +3396,7 @@ function callPeerFor(room) {
 function pickChat(to) {
   state.chatTo = to;
   state.chatToPicked = true;
+  state.chatToAuto = false;
   if (to === 'everyone') {
     state.roomUnread = 0;
     if (state.meetingConv?.convId) messaging.markRead(state.meetingConv.convId).catch(() => {});
@@ -3417,6 +3422,15 @@ function renderChatTo() {
   const oneToOne = others.length === 1 && !state.meetingConv?.convId;
   if (oneToOne && !state.chatToPicked && state.chatTo === 'everyone') {
     state.chatTo = others[0].userId;
+    state.chatToAuto = true;
+  }
+  // ...and stop being one when a third person arrives. The automatic choice
+  // used to stay, so in a three-person meeting the panel still wrote to one
+  // of them privately -- a message meant for the room went to a person, and
+  // the other's messages never showed. What the person chose stays chosen.
+  if (!oneToOne && state.chatToAuto && !state.chatToPicked) {
+    state.chatTo = 'everyone';
+    state.chatToAuto = false;
   }
   if (others.some((p) => p.userId === state.callPeer)) state.callPeerSeen = true;
   const awaitingPeer = state.chatTo === state.callPeer && !state.callPeerSeen;
@@ -5597,6 +5611,7 @@ async function joinMeeting(room, title) {
   state.room = room;
   state.sameDeviceTold = false;
   state.chatToPicked = false;
+  state.chatToAuto = false;
   // A one-to-one call: fetch your conversation with them now, while the
   // pre-join is on screen, so the call's chat opens with its history
   // instead of "Opening your conversation..." after you walk in. The
