@@ -5094,3 +5094,87 @@ Two tests (`pushorder_test.go`) cover it:
 - a write buffer a burst grew past 256 KB is released after the flush instead of kept.
 
 A 24 MB flood into a 200-person meeting took the server from 227 MB to 1,486 MB before this, and from 208 MB to 418 MB after. Every frame was still delivered, and the per-receiver 2 MB budget is the bound.
+
+### 6bu. WebRTC at 50, and where it stops: 100, 200, 300
+
+`engine/cmd/sfuload` drives the path browsers use: N pion clients join over
+the meeting socket, negotiate both peer connections over real
+ICE/DTLS/SRTP, publish a synthetic VP8 camera (three simulcast layers) and an
+Opus microphone (three people talking), show nine tiles each and count what
+arrives per track. The stress harness runs it as the `webrtc` phase and
+profiles the server while it runs.
+
+**Three defects found at 50, all fixed:**
+
+- **The server registered 29 codecs.** Every subscriber description repeats
+  the list in each media section, and pion re-derives a section's codecs
+  once per payload type on every renegotiation: quadratic, per section, per
+  renegotiation. With 50 people that was 42% of the server's CPU. It now
+  registers what clients send: Opus; VP8, VP9 profile 0 and H.264
+  constrained baseline, each with its RTX twin.
+- **Nothing fed the bandwidth estimator.** Every receiver sat at the
+  1.5 Mbit/s starting estimate on every network. Receiver reports now feed
+  it every half second: under 2% loss it climbs, over 10% it backs off.
+  One update counts at most one second of elapsed time, so a gap in feedback
+  is not mistaken for a second of clean capacity.
+- **A tile that came back on screen resumed wrongly** (`forwarder.go`).
+  After the allocator paused it (layer `none`), the forwarder resumed:
+  - on whatever frame came next, not a key frame;
+  - with the sequence number advanced by every packet the publisher sent
+    during the pause.
+
+  The receiver saw the pause as loss and reported it, and the estimator
+  backed off. Starved tiles paused, which made more pauses: the estimate fed
+  on itself down to 200 kbit/s on loopback, and 10 on-screen cameras stalled
+  at layer `none`. A resume now re-anchors on the next key frame, one past
+  the last sequence number sent (audio: the next packet). The test
+  `resume_test.go` failed against the old code: the audio case showed a
+  501-packet gap.
+- **A renegotiation request could be lost.** It was two atomic flags. A
+  track added while an offer was out failed to claim the flag; if the answer
+  landed before the request marked itself pending, nobody looked again. The
+  track was on the server and never offered: one receiver had 47 of 49
+  cameras. It is now one mutex-guarded gate (`negGate`), and failure paths
+  release it too.
+
+| 50 people over WebRTC | before | after |
+|---|---|---|
+| on-screen cameras stalled | 10 | 0 |
+| cameras each person is subscribed to | min 47 of 49 | 49 of 49 |
+| on-screen camera, average | 242 kbit/s | 338 kbit/s |
+| off-screen camera, average | 0.08 kbit/s | 0.0 kbit/s |
+| microphones stalled | 0 | 0 |
+| server CPU | | 2.3 cores |
+
+Half the server's CPU at 50 is the per-packet UDP send, one system call per
+packet per receiver. Windows has no batched send (`sendmmsg`).
+
+**At 100, 200 and 300 it does not hold.** Same machine (24 cores), load
+client included.
+
+| | 100 | 200 | 300 |
+|---|---|---|---|
+| joined and negotiated | 100, 0 errors | 200, 0 errors | 291, 19 errors |
+| cameras each person is subscribed to | 99 of 99 | 145–162 of 199 | 113–133 of 299 |
+| microphones stalled | 297 (all) | 597 | 870 |
+| on-screen cameras stalled | 37 | 1,379 | 1,081 |
+| video / audio latency p99 | 41.7 s / 50.2 s | 175 s / 178 s | — |
+| server heap during media | 2.2 GB | 4.2 GB | 13 GB, 55,762 goroutines |
+
+Two causes, both structural:
+
+1. **One goroutine per publisher sends to every subscriber, synchronously**
+   (`PublishedTrack.dispatch`). A talker's audio to 99 people is about 5,000
+   encrypted sends a second on one goroutine. When it falls behind, packets
+   wait in pion's inbound buffer (about 1 MB per stream, some 27 s of
+   audio), which is where the 41–50 s comes from. One slow receiver also
+   delays every other receiver of that track.
+2. **Everyone is subscribed to every camera.** That is N² forwarded tracks:
+   9,900 at 100, 89,700 at 300, each with pion's per-sender buffers and an
+   RTCP-reading goroutine. Every renegotiation carries a description with N
+   media sections. At the 500 cap it would be about 250,000.
+
+Next: a bounded send queue per receiver (one writer each, so dispatch only
+hands off and a lagging receiver drops its own frames); then a fixed pool of
+video slots per receiver, re-pointed at whatever is on screen without
+renegotiating, and a small pool for the loudest speakers' audio.

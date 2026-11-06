@@ -456,7 +456,7 @@ func (r *Router) allocatePeer(p *Peer, tracks map[string]*PublishedTrack) {
 	}
 
 	budget := Budget{
-		EstimateBps:   p.Estimator.Rate(),
+		EstimateBps:   p.EstimateRate(),
 		HeadroomRatio: 0.15,
 	}
 	for _, a := range Allocate(subs, budget) {
@@ -483,6 +483,9 @@ type RouterStats struct {
 	Peers  int              `json:"peers"`
 	Tracks int              `json:"tracks"`
 	Feeds  []DownstreamStat `json:"feeds"`
+	// Estimates is each receiver's bandwidth estimate, bit/s: what the
+	// allocator may spend on them.
+	Estimates map[string]int `json:"estimates"`
 }
 
 type DownstreamStat struct {
@@ -510,8 +513,9 @@ func (r *Router) Stats() RouterStats {
 	}
 	r.mu.RUnlock()
 
-	st := RouterStats{Peers: len(peers), Tracks: len(tracks)}
+	st := RouterStats{Peers: len(peers), Tracks: len(tracks), Estimates: make(map[string]int, len(peers))}
 	for _, p := range peers {
+		st.Estimates[p.ID] = p.EstimateRate()
 		for tid, d := range p.Downstreams() {
 			t := tracks[tid]
 			pub := ""

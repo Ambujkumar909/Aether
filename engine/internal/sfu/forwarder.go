@@ -97,6 +97,11 @@ type Forwarder struct {
 	packetsOut   uint64
 	switches     uint64
 	keyframeWait uint64
+
+	// resuming is set when forwarding restarts after a pause (LayerNone and
+	// back). The next packet (for video, the next keyframe) re-anchors the
+	// translation so the pause leaves no gap in the outbound sequence.
+	resuming bool
 }
 
 // NewForwarder starts with nothing selected. The first Select decides.
@@ -128,12 +133,25 @@ func (f *Forwarder) Select(target LayerID) bool {
 		// Unsubscribing needs no keyframe and no ceremony.
 		f.current = LayerNone
 		f.awaitingKeyframe = false
+		f.resuming = false
 		return false
 	}
-	if !f.started || f.current == LayerNone {
+	if !f.started {
 		f.current = target
 		f.awaitingKeyframe = false
 		return true
+	}
+	if f.current == LayerNone {
+		// Resuming after a pause (the tile went off screen and came back).
+		// The publisher numbered on through the pause, so carrying on from
+		// the last packet sent would show the receiver the whole pause as
+		// one gap -- reported as loss, which drives its bandwidth estimate
+		// down until its tiles starve (ARCHITECTURE 6bu). Re-anchor on the
+		// next keyframe instead, exactly as a layer switch does.
+		f.current = target
+		f.awaitingKeyframe = false
+		f.resuming = true
+		return f.keyframed
 	}
 	if target == f.current {
 		f.awaitingKeyframe = false
@@ -158,6 +176,9 @@ func (f *Forwarder) Waiting() (LayerID, bool) {
 	}
 	if f.awaitingKeyframe {
 		return f.target, true
+	}
+	if f.keyframed && f.resuming {
+		return f.current, true
 	}
 	if f.keyframed && !f.started && f.current != LayerNone {
 		return f.current, true
@@ -223,6 +244,15 @@ func (f *Forwarder) WriteRTP(layer LayerID, pkt *rtp.Packet, isKeyframe bool) De
 
 	if layer != f.current {
 		return Drop
+	}
+
+	if f.resuming {
+		if f.keyframed && !isKeyframe {
+			return Drop
+		}
+		f.resuming = false
+		f.reanchorLocked(pkt)
+		return Forward
 	}
 
 	if !f.started {
@@ -293,7 +323,12 @@ func (f *Forwarder) completeSwitchLocked(pkt *rtp.Packet) {
 	f.current = f.target
 	f.awaitingKeyframe = false
 	f.switches++
+	f.reanchorLocked(pkt)
+}
 
+// reanchorLocked continues the outbound space by one onto a new inbound
+// stream position: a layer switch, or a resume after a pause.
+func (f *Forwarder) reanchorLocked(pkt *rtp.Packet) {
 	f.outSeq++
 	f.outTS += frameTickGuess
 	f.refSeq = pkt.SequenceNumber

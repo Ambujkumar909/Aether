@@ -67,7 +67,12 @@ func main() {
 		"let visitors create their own accounts (they are always created as members)")
 	adminEmail := flag.String("admin-email", "", "bootstrap administrator email")
 	adminPass := flag.String("admin-password", "", "bootstrap administrator password (generated if empty)")
+	pprofAddr := flag.String("pprof", "",
+		"serve Go's profiler on this address, loopback only (e.g. 127.0.0.1:6060); off when empty")
 	flag.Parse()
+	if *pprofAddr != "" {
+		servePprof(*pprofAddr)
+	}
 
 	level := slog.LevelInfo
 	if *debug {

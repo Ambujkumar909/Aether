@@ -61,6 +61,12 @@ type Peer struct {
 	Meter     *ledger.Meter
 	Estimator *Estimator
 
+	// estMu guards Estimator (fed from RTCP, read by the allocation loop)
+	// and the loss window below.
+	estMu   sync.Mutex
+	lossMax float64   // worst fraction lost reported since the last update
+	lastEst time.Time // when the estimator last moved
+
 	// SendSDP and SendICE hand signalling frames to the control plane. They
 	// must not block: the control plane owns its own outbound queue.
 	SendSDP func(dir Direction, isOffer bool, sdp string)
@@ -89,8 +95,7 @@ type Peer struct {
 	// Negotiation on the subscriber connection is serialised. Tracks arrive
 	// in bursts -- a five-person room fills in one round trip -- and firing a
 	// renegotiation per track would produce five offers where one suffices.
-	negotiating atomic.Bool
-	pendingNeg  atomic.Bool
+	neg negGate
 
 	closed atomic.Bool
 }
@@ -155,11 +160,58 @@ func NewPeer(id, roomID string, meter *ledger.Meter, ice []webrtc.ICEServer, log
 	return p, nil
 }
 
+// registerCodecs registers the codecs this system uses, and no others.
+//
+// It used to register pion's defaults: 29 payload types, among them three
+// telephone codecs, five H.264 profiles, AV1 and VP9 profile 2, none of
+// which the client sends. Every subscriber's description repeats the list in
+// each of its media sections, and on every renegotiation pion re-derives the
+// codecs of each section once per payload type, re-parsing the section each
+// time: quadratic in the list, for every section, for every renegotiation.
+// With 50 people that was 42% of the server's CPU (the WebRTC stress run,
+// ARCHITECTURE 6bu). The client prefers VP9 profile 0, then VP8; H.264
+// constrained baseline stays for older Safari. Each video codec has its
+// retransmission twin, and Opus is the only audio codec any browser needs.
+func registerCodecs(m *webrtc.MediaEngine) error {
+	fb := []webrtc.RTCPFeedback{{Type: "goog-remb"}, {Type: "ccm", Parameter: "fir"}, {Type: "nack"}, {Type: "nack", Parameter: "pli"}}
+	audio := webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1"},
+		PayloadType:        111,
+	}
+	if err := m.RegisterCodec(audio, webrtc.RTPCodecTypeAudio); err != nil {
+		return err
+	}
+	video := []struct {
+		pt, rtx uint8
+		mime    string
+		fmtp    string
+	}{
+		{96, 97, webrtc.MimeTypeVP8, ""},
+		{98, 99, webrtc.MimeTypeVP9, "profile-id=0"},
+		{102, 103, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
+	}
+	for _, v := range video {
+		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: v.mime, ClockRate: 90000, SDPFmtpLine: v.fmtp, RTCPFeedback: fb},
+			PayloadType:        webrtc.PayloadType(v.pt),
+		}, webrtc.RTPCodecTypeVideo); err != nil {
+			return err
+		}
+		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeRTX, ClockRate: 90000, SDPFmtpLine: fmt.Sprintf("apt=%d", v.pt)},
+			PayloadType:        webrtc.PayloadType(v.rtx),
+		}, webrtc.RTPCodecTypeVideo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // newAPI builds a media engine with the codecs and header extensions this
 // system depends on.
 func newAPI(addrs *AddressPolicy, media *MediaTransport) (*webrtc.API, error) {
 	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
+	if err := registerCodecs(m); err != nil {
 		return nil, err
 	}
 
@@ -415,10 +467,9 @@ func (p *Peer) HandleAnswer(sdpStr string) error {
 	}); err != nil {
 		return fmt.Errorf("set remote answer: %w", err)
 	}
-	p.negotiating.Store(false)
-	// A renegotiation requested while the last one was in flight runs now.
-	if p.pendingNeg.CompareAndSwap(true, false) {
-		p.scheduleNegotiation()
+	// A renegotiation requested while this one was in flight runs now.
+	if p.neg.done() && !p.closed.Load() {
+		go p.offer()
 	}
 	return nil
 }
@@ -437,39 +488,84 @@ func (p *Peer) HandleICE(dir Direction, candidate string) error {
 	return pc.AddICECandidate(c)
 }
 
+// negGate serialises subscriber renegotiation: one offer in flight at a
+// time, and a request made meanwhile is remembered and run when it ends.
+//
+// It was two atomic flags, and that lost requests. A track added while an
+// offer was out failed to claim the flag; if the answer landed before the
+// request marked itself pending, the answer saw nothing pending and the
+// request was then marked where nobody would look. The track was on the
+// server and never offered: with 50 people joining at once, one receiver had
+// 47 of 49 cameras (ARCHITECTURE 6bu). Under one lock there is no window.
+type negGate struct {
+	mu       sync.Mutex
+	inFlight bool
+	pending  bool
+}
+
+// begin reports whether the caller should make an offer now. If one is
+// already out, the request is remembered instead: an offer queued behind it
+// would arrive out of order.
+func (g *negGate) begin() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inFlight {
+		g.pending = true
+		return false
+	}
+	g.inFlight = true
+	return true
+}
+
+// done ends the offer in flight, answered or failed, and reports whether a
+// request made meanwhile means another offer must start now (still in flight).
+func (g *negGate) done() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.pending {
+		g.pending = false
+		return true
+	}
+	g.inFlight = false
+	return false
+}
+
 // scheduleNegotiation offers on the subscriber connection, collapsing bursts.
 func (p *Peer) scheduleNegotiation() {
 	if p.closed.Load() {
 		return
 	}
-	if !p.negotiating.CompareAndSwap(false, true) {
-		// One is already in flight. Remember that another is wanted rather
-		// than queueing an offer that would arrive out of order.
-		p.pendingNeg.Store(true)
+	if p.neg.begin() {
+		go p.offer()
+	}
+}
+
+// offer makes one subscriber offer. Every way it ends without sending one
+// goes through neg.done, so a failure never leaves the gate shut: that would
+// be a permanent wedge with no symptom except silence.
+func (p *Peer) offer() {
+	fail := func() {
+		if p.neg.done() && !p.closed.Load() {
+			go p.offer()
+		}
+	}
+	offer, err := p.sub.CreateOffer(nil)
+	if err != nil {
+		fail()
 		return
 	}
-	go func() {
-		offer, err := p.sub.CreateOffer(nil)
-		if err != nil {
-			p.negotiating.Store(false)
-			return
-		}
-		if err := p.sub.SetLocalDescription(offer); err != nil {
-			p.negotiating.Store(false)
-			return
-		}
-		if p.SendSDP == nil {
-			// Nowhere to send it. This is a wiring error, not a runtime
-			// condition, and it must not leave the negotiation flag set:
-			// that is a permanent wedge with no symptom except silence.
-			p.Log.Error("subscriber offer with no signalling attached; dropped",
-				"peer", p.ID)
-			p.negotiating.Store(false)
-			return
-		}
-		p.Log.Debug("subscriber offer out", "peer", p.ID, "mlines", strings.Count(offer.SDP, "\nm="))
-		p.SendSDP(Subscriber, true, offer.SDP)
-	}()
+	if err := p.sub.SetLocalDescription(offer); err != nil {
+		fail()
+		return
+	}
+	if p.SendSDP == nil {
+		// Nowhere to send it: a wiring error, not a runtime condition.
+		p.Log.Error("subscriber offer with no signalling attached; dropped", "peer", p.ID)
+		p.neg.done()
+		return
+	}
+	p.Log.Debug("subscriber offer out", "peer", p.ID, "mlines", strings.Count(offer.SDP, "\nm="))
+	p.SendSDP(Subscriber, true, offer.SDP)
 }
 
 // ---------------------------------------------------------------------------
@@ -551,15 +647,71 @@ func (p *Peer) readSenderRTCP(sender *webrtc.RTPSender, t *PublishedTrack) {
 			continue
 		}
 		for _, pkt := range pkts {
-			switch pkt.(type) {
+			switch rr := pkt.(type) {
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
 				// A subscriber wants a keyframe. Pass it upstream, where it
 				// is deduplicated across every subscriber of this track.
 				t.RequestKeyframe(t.SubscribedLayer(p.ID))
+			case *rtcp.ReceiverReport:
+				for _, rep := range rr.Reports {
+					p.observeLoss(float64(rep.FractionLost)/256, time.Now())
+				}
 			}
 		}
 	}
 }
+
+// observeLoss feeds the bandwidth estimator from the receiver reports this
+// subscriber sends for what it is being forwarded.
+//
+// It was fed by nothing. The estimator started at 1.5 Mbit/s and stayed
+// there, so every receiver on every network had about 1.3 Mbit/s for all its
+// video: on a fast link a gallery of cameras was held far below what the
+// link could carry (against rule 3), and a ninth tile could be paused
+// outright (the WebRTC stress run, ARCHITECTURE 6bu). Loss is the signal
+// every browser already reports: under 2% the rate climbs (quickly back to a
+// remembered ceiling, cautiously past it), over 10% it backs off, between
+// the two it holds. At most every half second, on the worst report since.
+//
+// The delay-based signal (transport-wide congestion feedback, which sees a
+// queue building before anything is lost) is Observe, and is not wired yet.
+func (p *Peer) observeLoss(fraction float64, now time.Time) {
+	p.estMu.Lock()
+	defer p.estMu.Unlock()
+	if fraction > p.lossMax {
+		p.lossMax = fraction
+	}
+	if p.lastEst.IsZero() {
+		p.lastEst = now
+		return
+	}
+	if now.Sub(p.lastEst) < lossUpdateEvery {
+		return
+	}
+	sig := SignalUnderuse // hold
+	switch {
+	case p.lossMax > lossBackOff:
+		sig = SignalOveruse
+	case p.lossMax < lossClimb:
+		sig = SignalNormal
+	}
+	p.Estimator.Update(now, sig, 0)
+	p.lossMax = 0
+	p.lastEst = now
+}
+
+// EstimateRate is the bandwidth the allocator may spend on this receiver.
+func (p *Peer) EstimateRate() int {
+	p.estMu.Lock()
+	defer p.estMu.Unlock()
+	return p.Estimator.Rate()
+}
+
+const (
+	lossUpdateEvery = 500 * time.Millisecond
+	lossClimb       = 0.02
+	lossBackOff     = 0.10
+)
 
 // Unsubscribe detaches a track from this peer.
 func (p *Peer) Unsubscribe(trackID string) {

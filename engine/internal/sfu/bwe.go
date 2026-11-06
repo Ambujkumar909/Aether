@@ -109,6 +109,9 @@ type Config struct {
 	BurstBucketMs int
 }
 
+// maxUpdateGap is the most elapsed time one update may count.
+const maxUpdateGap = time.Second
+
 func DefaultConfig() Config {
 	return Config{
 		MinBps:              80_000,
@@ -231,6 +234,13 @@ func (e *Estimator) Update(now time.Time, sig Signal, measuredBps int) int {
 	dt := now.Sub(e.lastUpdate)
 	if dt <= 0 {
 		dt = time.Millisecond
+	}
+	// A gap in feedback is no evidence of capacity. The step scales with
+	// elapsed time, and the first report after a quiet spell (or the first
+	// ever, seconds after the estimator was made) would otherwise climb as
+	// if every second of the gap had been a clean one: straight to the cap.
+	if dt > maxUpdateGap {
+		dt = maxUpdateGap
 	}
 	e.lastUpdate = now
 	e.decayCeiling(now)

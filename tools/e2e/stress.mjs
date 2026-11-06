@@ -57,9 +57,12 @@ const MSGS = Number(arg('msgs', 10));
 const UI = process.argv.includes('--ui');
 const MEDIA = !process.argv.includes('--no-media');
 const MEDIA_SECONDS = Number(arg('media-seconds', 10));
+const RTC = !process.argv.includes('--no-webrtc');
+const RTC_SECONDS = Number(arg('rtc-seconds', 15));
 const KEEP = process.argv.includes('--keep');
 const PORT = 8460 + Math.floor(Math.random() * 30);
 const MEDIA_PORT = PORT + 100;
+const PPROF = `127.0.0.1:${PORT + 200}`;
 const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -116,7 +119,7 @@ if (!exe) {
 const adminEmail = 'stress-admin@example.test';
 const adminPass = 'stress-' + randomBytes(9).toString('base64url');
 const logLines = [];
-const server = spawn(exe, ['-addr', `${HOST}:${PORT}`, '-media-port', String(MEDIA_PORT), '-relay=false', '-trust-proxy', '-db', join(dir, 'stress.db'), '-web', join(root, 'web'), '-admin-email', adminEmail, '-admin-password', adminPass], { cwd: join(root, 'engine') });
+const server = spawn(exe, ['-addr', `${HOST}:${PORT}`, '-media-port', String(MEDIA_PORT), '-relay=false', '-trust-proxy', '-db', join(dir, 'stress.db'), '-web', join(root, 'web'), '-admin-email', adminEmail, '-admin-password', adminPass, '-pprof', PPROF], { cwd: join(root, 'engine') });
 for (const s of [server.stdout, server.stderr]) s.on('data', (d) => logLines.push(...d.toString().split('\n').filter(Boolean)));
 for (let i = 0; i < 60; i++) {
   try {
@@ -772,6 +775,66 @@ try {
   }
 
 
+
+  // ---- WebRTC: the path browsers use, with N real peer connections --------
+  // engine/cmd/sfuload: each person joins over the meeting socket, negotiates
+  // both peer connections, publishes a synthetic VP8 camera and an Opus
+  // microphone over real ICE/DTLS/SRTP, shows nine tiles, and counts what
+  // arrives per track.
+  if (RTC) {
+    await begin('webrtc');
+    const loader = join(here, '.stress', platform() === 'win32' ? 'sfuload.exe' : 'sfuload');
+    const b = spawnSync('go', ['build', '-o', loader, './cmd/sfuload'], { cwd: join(root, 'engine'), stdio: 'inherit' });
+    ok(b.status === 0, 'the load client builds');
+    const rtcRoom = `stress-rtc-${tag}`;
+    const spec = join(here, '.stress', 'people.json');
+    writeFileSync(spec, JSON.stringify({ base: BASE, room: rtcRoom, admin: { cookie: admin.cookie, ip: admin.ip, name: 'admin' }, people: people.map((p) => ({ cookie: p.cookie, ip: p.ip, name: `Person ${p.i}` })) }));
+    const cpu0 = await sample();
+    const t0r = now();
+    const profiled = (async () => {
+      await sleep(16000); // after joining and settling
+      try {
+        const prof = await fetch(`http://${PPROF}/debug/pprof/profile?seconds=10`);
+        writeFileSync(join(here, '.stress', 'webrtc-cpu.prof'), Buffer.from(await prof.arrayBuffer()));
+        const heap = await fetch(`http://${PPROF}/debug/pprof/heap`);
+        writeFileSync(join(here, '.stress', 'webrtc-heap.prof'), Buffer.from(await heap.arrayBuffer()));
+      } catch (e) {
+        console.log('  (profile not taken: ' + e.message + ')');
+      }
+    })();
+    // Run it alongside, so the server can be profiled while the meeting is
+    // live: a CPU profile over the measured window, and the heap after it.
+    const res = await new Promise((resolve) => {
+      const ch = spawn(loader, ['-in', spec, '-secs', String(RTC_SECONDS), '-shown', String(Math.min(9, N - 1)), '-talkers', '3']);
+      let stdout = '', stderr = '';
+      ch.stdout.on('data', (d) => (stdout += d));
+      ch.stderr.on('data', (d) => (stderr += d));
+      ch.on('close', (status) => resolve({ stdout, stderr, status }));
+    });
+    const cpu1 = await sample();
+    const line = (res.stdout || '').trim().split('\n').pop();
+    let r = null;
+    try {
+      r = JSON.parse(line);
+    } catch {
+      console.log((res.stderr || '').slice(0, 2000));
+    }
+    await profiled;
+    ok(!!r, 'the load client reported');
+    if (r) {
+      metric('webrtc report', r);
+      metric('server cpu during it (cores busy)', cpu0 && cpu1 ? (cpu1.cpuS - cpu0.cpuS) / ((now() - t0r) / 1000) : NaN);
+      ok(r.joined === N && r.errors === 0, `all ${N} joined and negotiated without an error (${r.joined} joined, ${r.errors} errors)`);
+      // Three people talking; everyone else muted (a muted browser sends no audio).
+      ok(r.audioTracksPerPerson.every((n, i) => n === r.talkers - (i < r.talkers ? 1 : 0)), `everyone receives every talker's microphone (${r.talkers} talking; per person ${[...new Set(r.audioTracksPerPerson)].join('/')})`);
+      ok(r.videoTracksPerPerson.every((n) => n === N - 1), `everyone is subscribed to the other ${N - 1} cameras (min ${Math.min(...r.videoTracksPerPerson)})`);
+      ok(r.audioStalled === 0, `no microphone stalled at any receiver (${r.audioStalled})`);
+      ok(r.shownCamerasStalled === 0, `no on-screen camera stalled (${r.shownCamerasStalled})`);
+      ok(r.hiddenCameraKbpsAvg < r.shownCameraKbpsAvg / 4, `off-screen cameras are held back: ${r.hiddenCameraKbpsAvg.toFixed(1)} kbit/s each against ${r.shownCameraKbpsAvg.toFixed(1)} on screen`);
+    }
+    await end();
+  }
+
   // ---- controls: every other meeting feature, with everyone in it --------
   await begin('controls');
   {
@@ -807,7 +870,7 @@ try {
     await sleep(800);
     // A muted speaker's words reach nobody (captions are speech).
     for (const p of people) p.m.finals = 0;
-    people[12].ms.send((w) => encodeCaption(w, true, 1, 'said while muted'));
+    people[N - 1].ms.send((w) => encodeCaption(w, true, 1, 'said while muted'));
     await sleep(1000);
     ok(people.every((p) => p.m.finals === 0), `a muted speaker's caption reaches nobody (${people.reduce((a, p) => a + p.m.finals, 0)} delivered)`);
     // Ten speakers unmute and speak at once, at the browser's pace: the
