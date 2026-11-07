@@ -22,6 +22,12 @@ for n in "$@"; do
   else
     echo "FAIL  $n"
     grep -E '^ *FAIL' "$WORK/log-$n.txt" | head -12
+    # One annotation per failing harness: readable on the run page and over
+    # the public API, where job logs are not.
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      msg=$( { grep -E '^ *FAIL' "$WORK/log-$n.txt" | head -6; tail -3 "$WORK/log-$n.txt"; tail -3 "$WORK/srv-$n.log"; } | tr '\n' '|' | cut -c1-900)
+      echo "::error title=harness $n::$msg"
+    fi
     tail -4 "$WORK/log-$n.txt"
     tail -5 "$WORK/srv-$n.log"
     fails=$((fails + 1))

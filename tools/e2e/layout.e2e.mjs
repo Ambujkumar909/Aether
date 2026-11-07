@@ -31,10 +31,13 @@ const SHOTS = join(here, '.shots');
 mkdirSync(SHOTS, { recursive: true });
 
 const CHROME = [
+  process.env.CHROME,
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-].find((p) => existsSync(p));
+].find((p) => p && existsSync(p));
 if (!CHROME) {
   console.error('no Chrome or Edge found to drive');
   process.exit(2);

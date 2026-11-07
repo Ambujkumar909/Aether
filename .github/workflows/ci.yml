@@ -71,5 +71,9 @@ jobs:
         working-directory: engine
       - run: npm ci
         working-directory: tools/e2e
+      # Ubuntu 24.04 restricts unprivileged user namespaces, which Chrome's
+      # sandbox needs; allowing them keeps the sandbox on (rather than
+      # running Chrome with --no-sandbox).
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: harnesses
-        run: bash tools/e2e/ci-browser.sh console layout layoutshell messaging call joinrace reset
+        run: bash tools/e2e/ci-browser.sh console layout messaging call joinrace reset

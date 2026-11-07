@@ -27,10 +27,13 @@ if (!accounts.A || !accounts.B) {
   process.exit(2);
 }
 const CHROME = [
+  process.env.CHROME,
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-].find((p) => existsSync(p));
+].find((p) => p && existsSync(p));
 // Chat is a toggle in the Teams layout (a second press closes it): open it
 // only if it is not already the panel showing.
 const openChat = (p) => p.evaluate(() => {

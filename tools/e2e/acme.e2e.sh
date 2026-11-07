@@ -43,6 +43,8 @@ docker run -d --name pebble --network $NET -e PEBBLE_VA_NOSLEEP=1 ghcr.io/letsen
 # Pebble validates HTTP-01 on 5002 and TLS-ALPN-01 on 5001, so Aether listens there.
 CA=$(hostpath "$(mktemp -d)")
 cid=$(docker create ghcr.io/letsencrypt/pebble) && docker cp "$cid:/test/certs/pebble.minica.pem" "$CA" >/dev/null && docker rm "$cid" >/dev/null
+# mktemp makes the directory owner-only; the server runs as uid 65532.
+chmod 755 "$CA" 2>/dev/null; chmod 644 "$CA/pebble.minica.pem" 2>/dev/null
 docker volume create acme-e2e-data >/dev/null
 start_aether() {
   docker run -d --name acme-e2e-aether --network $NET --ip $IP \
