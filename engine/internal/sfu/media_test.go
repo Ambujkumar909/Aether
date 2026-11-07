@@ -1,6 +1,7 @@
 package sfu
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,6 +39,10 @@ type client struct {
 	// slotTrack is the slot map the server sent: slot id -> published track
 	// id, so packets are counted against what the slot carries now.
 	slotTrack sync.Map
+	// sdpDelay holds every description this long before it is applied, in
+	// both directions: candidates then always arrive first, as on a loaded
+	// machine.
+	sdpDelay time.Duration
 }
 
 // packetsOf is how many packets of trackID this client has received.
@@ -56,7 +61,7 @@ func newClient(t *testing.T, r *Router, id string) *client {
 // so a test can hand the client ICE servers and a transport policy -- which is
 // how the relay path is exercised: a client forced to relay-only, against a
 // real TURN server, must still connect to the SFU.
-func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration) *client {
+func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration, opts ...func(*client)) *client {
 	t.Helper()
 
 	// No ICE servers: everything is on loopback, and reaching for STUN in a
@@ -81,11 +86,15 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 	}
 
 	c := &client{t: t, pub: pub, sub: sub, gotTrack: make(chan struct{}, 8)}
+	for _, o := range opts {
+		o(c)
+	}
 
 	// Server to client signalling, handed to AddPeer so it is attached before
 	// the first subscription can fire a renegotiation. Setting it afterwards is
 	// the race the gateway had; the harness must not quietly have it too.
 	sendSDP := func(dir Direction, isOffer bool, body string) {
+		time.Sleep(c.sdpDelay)
 		if dir == Publisher {
 			if err := pub.SetRemoteDescription(webrtc.SessionDescription{
 				Type: webrtc.SDPTypeAnswer, SDP: body,
@@ -110,6 +119,7 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 			t.Logf("client %s: set local answer: %v", id, err)
 			return
 		}
+		time.Sleep(c.sdpDelay)
 		if err := c.peer.HandleAnswer(ans.SDP); err != nil {
 			t.Logf("client %s: server rejected answer: %v", id, err)
 		}
@@ -121,7 +131,7 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 		}
 		var init webrtc.ICECandidateInit
 		if err := jsonUnmarshal(cand, &init); err == nil {
-			_ = pc.AddICECandidate(init)
+			addWhenReady(func() error { return pc.AddICECandidate(init) })
 		}
 	}
 
@@ -141,13 +151,15 @@ func newClientWith(t *testing.T, r *Router, id string, cfg webrtc.Configuration)
 		if ic == nil {
 			return
 		}
-		_ = peer.HandleICE(Publisher, mustJSON(ic.ToJSON()))
+		cand := mustJSON(ic.ToJSON())
+		addWhenReady(func() error { return peer.HandleICE(Publisher, cand) })
 	})
 	sub.OnICECandidate(func(ic *webrtc.ICECandidate) {
 		if ic == nil {
 			return
 		}
-		_ = peer.HandleICE(Subscriber, mustJSON(ic.ToJSON()))
+		cand := mustJSON(ic.ToJSON())
+		addWhenReady(func() error { return peer.HandleICE(Subscriber, cand) })
 	})
 
 	sub.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -366,4 +378,26 @@ func (c *client) diag() string {
 	}
 	return strings.Join([]string{one("cli.pub", c.pub), one("cli.sub", c.sub),
 		one("srv.pub", c.peer.pub), one("srv.sub", c.peer.sub)}, "; ")
+}
+
+// addWhenReady adds a trickled candidate, holding it while the far side has
+// not applied the description it belongs to. Candidates are gathered during
+// SetLocalDescription, so they routinely reach the other end before the
+// offer or answer does, and pion refuses them then. On a fast machine the
+// order nearly always works out; on a loaded CI runner every candidate in
+// both directions was lost and the connection sat in "checking" with none
+// to check (0 remote candidates on both ends). The browser client holds
+// early candidates the same way (web/src/rtc.js).
+func addWhenReady(add func() error) {
+	if err := add(); !errors.Is(err, webrtc.ErrNoRemoteDescription) {
+		return
+	}
+	go func() {
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+			if err := add(); !errors.Is(err, webrtc.ErrNoRemoteDescription) {
+				return
+			}
+		}
+	}()
 }
