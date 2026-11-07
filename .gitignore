@@ -23,3 +23,6 @@ graphify-out/
 tools/e2e/.stress/
 __pycache__/
 /screenshots/
+tools/e2e/.mail/
+# The deployment's real settings (SMTP password, admin): never committed.
+deploy/aether.env

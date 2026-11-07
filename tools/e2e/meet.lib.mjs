@@ -44,9 +44,12 @@ export async function accounts(labels) {
 
 export async function launch() {
   const CHROME = [
+    process.env.CHROME,
     'C:/Program Files/Google/Chrome/Application/chrome.exe',
     'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  ].find((p) => existsSync(p));
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+  ].find((p) => p && existsSync(p));
   return puppeteer.launch({
     executablePath: CHROME,
     headless: true,

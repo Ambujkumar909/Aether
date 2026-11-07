@@ -97,3 +97,15 @@ func TestUncoveredNamesEveryAddressTheCertificateLacks(t *testing.T) {
 		t.Fatalf("a certificate naming nothing reported %d missing, want %d", len(got), len(addrs))
 	}
 }
+
+// A container keeps its certificate on a data volume that starts empty: the
+// directory is made, not assumed.
+func TestACertificateIsWrittenIntoADirectoryThatDidNotExist(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data", "tls")
+	if _, err := ensureCert(filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")); err != nil {
+		t.Fatalf("first start on an empty volume: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "key.pem")); err != nil {
+		t.Fatal(err)
+	}
+}

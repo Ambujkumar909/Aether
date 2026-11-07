@@ -87,6 +87,10 @@ type Service struct {
 	// there is no organisation and only contacts and exact addresses resolve.
 	OrgDomains func(ctx context.Context) []string
 
+	// SendReset delivers a password reset link for token to email. Wired in
+	// main when outgoing mail is configured; nil turns password reset off.
+	SendReset func(email, token string)
+
 	// dummyHash makes an unknown-email login cost the same as a known one.
 	// Without it, response time discloses which addresses are registered,
 	// which is how attackers build a target list before ever guessing a

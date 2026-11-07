@@ -25,12 +25,14 @@ import (
 type Action string
 
 const (
-	ActionLoginSucceeded  Action = "auth.login.succeeded"
-	ActionLoginFailed     Action = "auth.login.failed"
-	ActionLogout          Action = "auth.logout"
-	ActionSessionRevoked  Action = "auth.session.revoked"
-	ActionAccountLocked   Action = "auth.account.locked"
-	ActionPasswordChanged Action = "auth.password.changed"
+	ActionLoginSucceeded     Action = "auth.login.succeeded"
+	ActionLoginFailed        Action = "auth.login.failed"
+	ActionLogout             Action = "auth.logout"
+	ActionSessionRevoked     Action = "auth.session.revoked"
+	ActionAccountLocked      Action = "auth.account.locked"
+	ActionPasswordChanged    Action = "auth.password.changed"
+	ActionPasswordResetAsked Action = "auth.password.reset.requested"
+	ActionPasswordReset      Action = "auth.password.reset"
 
 	ActionSignUp        Action = "auth.signup"
 	ActionSignUpBlocked Action = "auth.signup.blocked"

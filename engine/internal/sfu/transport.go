@@ -74,6 +74,14 @@ type MediaTransport struct {
 	// must not advertise 127.0.0.1 to remote peers, where it is noise that
 	// every relay candidate gets pointlessly paired against.
 	wildcard bool
+
+	// PublicIP, when set, replaces the address in every host candidate this
+	// server announces, keeping the port. It is the address browsers reach
+	// the media port on when the server is behind a 1:1 NAT -- a container
+	// (its interface is a private bridge address only the host can reach) or
+	// a cloud VM with a mapped public address. Empty announces the bound
+	// addresses themselves, which is right on a LAN.
+	PublicIP string
 }
 
 // One address's sockets: a UDP socket and its mux, and (best effort) a TCP
@@ -285,7 +293,7 @@ func (t *MediaTransport) TCPOnly() *MediaTransport {
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return &MediaTransport{UDPPort: t.UDPPort, TCPPort: t.TCPPort, Log: t.Log, tcpMux: t.tcpMux, tcpOnly: true, wildcard: t.wildcard}
+	return &MediaTransport{UDPPort: t.UDPPort, TCPPort: t.TCPPort, Log: t.Log, tcpMux: t.tcpMux, tcpOnly: true, wildcard: t.wildcard, PublicIP: t.PublicIP}
 }
 
 // Apply configures a SettingEngine to use the shared listeners.
@@ -324,6 +332,18 @@ func (t *MediaTransport) Apply(se *webrtc.SettingEngine) {
 	// every device holds its own carrier-routed IPv6 address and none of them
 	// can reach each other's.
 	se.SetNetworkTypes(types)
+	// Behind a 1:1 NAT the bound address is unreachable from outside; the
+	// candidate carries the public one instead (same port, which the NAT or
+	// the container's port mapping forwards unchanged).
+	if t.PublicIP != "" {
+		if err := se.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+			External:        []string{t.PublicIP},
+			AsCandidateType: webrtc.ICECandidateTypeHost,
+			Mode:            webrtc.ICEAddressRewriteReplace,
+		}); err != nil && t.Log != nil {
+			t.Log.Error("media: public address not applied", "public_ip", t.PublicIP, "err", err)
+		}
+	}
 }
 
 // Close releases the listeners. Safe to call more than once and on nil.

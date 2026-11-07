@@ -71,4 +71,18 @@ func TestHardenedTLSRefusesTLS12AndServes13(t *testing.T) {
 	default:
 		t.Fatalf("not an AEAD 1.3 suite: %s", tls.CipherSuiteName(st.CipherSuite))
 	}
+	// A client that offers the post-quantum hybrid gets it (Go's own client,
+	// like current browsers, offers it first).
+	if st.CurveID != tls.X25519MLKEM768 {
+		t.Fatalf("key exchange %v, want the post-quantum X25519MLKEM768", st.CurveID)
+	}
+	// And a client without it still connects, on classical X25519.
+	old, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}})
+	if err != nil {
+		t.Fatalf("a client without ML-KEM was refused: %v", err)
+	}
+	defer old.Close()
+	if cs := old.ConnectionState(); cs.CurveID != tls.X25519 {
+		t.Fatalf("classical client got %v", cs.CurveID)
+	}
 }

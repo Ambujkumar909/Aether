@@ -361,7 +361,7 @@ func (g *Gateway) run(ctx context.Context, c *Conn, roomID, name string) {
 	}
 	// Meeting controls reach the media plane through here. The router knows
 	// nothing about hosts; the room does.
-	router.Permit = func(peerID, kind string) bool { return rm.May(peerID, kind) }
+	router.SetPermit(func(peerID, kind string) bool { return rm.May(peerID, kind) })
 
 	// Signalling is attached IN the AddPeer call, not after it. AddPeer
 	// subscribes the newcomer to every existing track, and each subscription
@@ -956,6 +956,7 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 			return err
 		}
 		dir := sfu.Direction(m.Dir)
+		g.Log.Debug("sdp in", "id", p.ID, "dir", dir.String(), "offer", m.IsOffer, "bytes", len(m.Body))
 		if m.IsOffer {
 			// Only the publisher connection is ever client-offered. An offer
 			// on the subscriber connection means a confused or hostile

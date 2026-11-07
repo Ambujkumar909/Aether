@@ -125,6 +125,17 @@ export async function signup(email, displayName, password) {
   return session.adopt(res);
 }
 
+// forgotPassword asks for a reset link. The answer is the same whether or not
+// the address has an account.
+export async function forgotPassword(email) {
+  return api.post('/api/identity/password/forgot', { email });
+}
+
+// resetPassword sets a new password with the token from the emailed link.
+export async function resetPassword(token, password) {
+  return api.post('/api/identity/password/reset', { token, password });
+}
+
 // serverConfig reports which options this deployment offers, so the sign-in
 // page never renders a "Create an account" link on a server that refuses.
 export async function serverConfig() {

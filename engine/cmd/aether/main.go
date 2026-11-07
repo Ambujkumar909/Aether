@@ -27,14 +27,19 @@ import (
 	"github.com/aether-rtc/aether/internal/modules/messaging"
 	"github.com/aether-rtc/aether/internal/modules/scheduling"
 	"github.com/aether-rtc/aether/internal/modules/settings"
+	"github.com/aether-rtc/aether/internal/platform/backup"
 	"github.com/aether-rtc/aether/internal/platform/database"
 	"github.com/aether-rtc/aether/internal/platform/httpx"
+	"github.com/aether-rtc/aether/internal/platform/mail"
 	"github.com/aether-rtc/aether/internal/relay"
 	"github.com/aether-rtc/aether/internal/room"
 	"github.com/aether-rtc/aether/internal/sfu"
 	"github.com/aether-rtc/aether/internal/signal"
 	"github.com/pion/webrtc/v4"
 )
+
+// version is the release this binary was built as (-ldflags "-X main.version=...").
+var version = "dev"
 
 func main() {
 	addr := flag.String("addr", ":8443", "listen address")
@@ -69,9 +74,108 @@ func main() {
 	adminPass := flag.String("admin-password", "", "bootstrap administrator password (generated if empty)")
 	pprofAddr := flag.String("pprof", "",
 		"serve Go's profiler on this address, loopback only (e.g. 127.0.0.1:6060); off when empty")
+	publicIPFlag := flag.String("public-ip", "",
+		"the IPv4 address browsers reach this server on, when it sits behind a 1:1 NAT "+
+			"(a container, a cloud VM): media candidates and relay URLs carry it instead "+
+			"of the bound address. Empty uses this machine's own address (right on a LAN)")
+	relayPorts := flag.String("relay-ports", "",
+		"the port range relay allocations use, e.g. 49160-49200; empty is any free port, "+
+			"which a container or firewall cannot publish")
+	relayAltTCP := flag.Int("relay-alt-tcp", 443,
+		"the relay's extra TCP port for networks that allow only HTTPS; 0 turns it off "+
+			"(it must be 0 when the web server itself holds 443)")
+	acmeDomain := flag.String("acme-domain", "",
+		"obtain and renew a certificate for these hostnames (comma-separated) from an ACME "+
+			"authority, Let's Encrypt by default; implies HTTPS")
+	acmeEmail := flag.String("acme-email", "", "contact address the ACME authority sends expiry notices to")
+	acmeCache := flag.String("acme-cache", "", "where ACME keys and certificates persist (default: acme/ beside the database)")
+	acmeDirectory := flag.String("acme-directory", "", "ACME directory URL; empty is Let's Encrypt production")
+	acmeCA := flag.String("acme-ca", "", "PEM root to trust for -acme-directory (a private or test authority)")
+	httpAddr := flag.String("http-addr", "",
+		"plain-HTTP listener for ACME challenges and redirects to HTTPS (default :80 with -acme-domain)")
+	publicURL := flag.String("public-url", "",
+		"the address people reach this server at (https://meet.example.com); links in email point here. Default: https:// and the first -acme-domain")
+	smtpAddr := flag.String("smtp-addr", "",
+		"outgoing mail server, host:port (465: TLS; any other port must offer STARTTLS); empty: no email, and password reset is off")
+	smtpUser := flag.String("smtp-user", "", "outgoing mail user name")
+	smtpPassword := flag.String("smtp-password", "", "outgoing mail password (prefer AETHER_SMTP_PASSWORD: a flag shows in the process list)")
+	smtpFrom := flag.String("smtp-from", "", "the address email comes from, e.g. noreply@example.com")
+	smtpCA := flag.String("smtp-ca", "", "a PEM certificate authority to trust for the mail server, beside the system's")
+	metricsAddr := flag.String("metrics-addr", "",
+		"serve Prometheus metrics at /metrics on this address, plain HTTP: keep it on a private network (e.g. 127.0.0.1:9464); empty turns it off")
+	healthcheck := flag.Bool("healthcheck", false,
+		"ask the running server on -addr whether it is healthy, exit 0 or 1, and stop (for container health checks)")
+	backupDir := flag.String("backup-dir", "", "where database snapshots and the file mirror go (default: backups/ beside the database)")
+	backupEvery := flag.Duration("backup-every", 6*time.Hour, "how often the running server snapshots itself; 0 turns scheduled backups off")
+	backupKeep := flag.Int("backup-keep", 28, "how many database snapshots to keep (with -backup-every 6h, a week)")
+	backupNow := flag.Bool("backup-now", false, "take one backup of -db now (beside a running server is fine), print where, and stop")
+	restoreFrom := flag.String("restore", "", "replace -db with this verified snapshot and stop; the server must not be running")
 	flag.Parse()
+	fromEnv, err := applyEnv(flag.CommandLine, os.LookupEnv)
+	if err != nil {
+		slog.Error("configuration", "err", err)
+		os.Exit(2)
+	}
+	if *healthcheck {
+		os.Exit(checkHealth(*addr, *useTLS || *acmeDomain != ""))
+	}
+	bopts := backup.Options{DBPath: *dbPath, FilesDir: filepath.Join(filepath.Dir(*dbPath), "files"),
+		Dir: *backupDir, Keep: *backupKeep}
+	if bopts.Dir == "" {
+		bopts.Dir = filepath.Join(filepath.Dir(*dbPath), "backups")
+	}
+	if *backupNow {
+		res, err := backup.Run(context.Background(), bopts)
+		if err != nil {
+			slog.Error("backup failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("backup taken", "file", res.File, "bytes", res.Bytes, "files_copied", res.FilesCopied, "files_pruned", res.FilesPruned, "removed", res.Removed)
+		os.Exit(0)
+	}
+	if *restoreFrom != "" {
+		if err := backup.Restore(context.Background(), *restoreFrom, *dbPath); err != nil {
+			slog.Error("restore failed; the database is unchanged", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("restored; the previous database is kept beside it", "from", *restoreFrom, "db", *dbPath, "kept", *dbPath+".before-restore")
+		os.Exit(0)
+	}
 	if *pprofAddr != "" {
 		servePprof(*pprofAddr)
+	}
+	publicIP, err := parsePublicIP(*publicIPFlag)
+	if err != nil {
+		slog.Error("configuration", "err", err)
+		os.Exit(2)
+	}
+	relayMin, relayMax, err := parsePortRange(*relayPorts)
+	if err != nil {
+		slog.Error("configuration", "err", err)
+		os.Exit(2)
+	}
+	domains, err := parseDomains(*acmeDomain)
+	if err != nil {
+		slog.Error("configuration", "err", err)
+		os.Exit(2)
+	}
+	linkBase, err := parsePublicURL(*publicURL, domains)
+	if err != nil {
+		slog.Error("configuration", "err", err)
+		os.Exit(2)
+	}
+	var smtpCfg *mail.SMTP
+	if *smtpAddr != "" {
+		if smtpCfg, err = newSMTP(*smtpAddr, *smtpUser, *smtpPassword, *smtpFrom, *smtpCA); err != nil {
+			slog.Error("configuration", "err", err)
+			os.Exit(2)
+		}
+	}
+	// Serving HTTPS means the session cookie is Secure unless the operator
+	// said otherwise: a flag that has to be remembered to be safe eventually
+	// is not, and the plain-HTTP dev listener is the only place it is off.
+	if (*useTLS || len(domains) > 0) && !wasSet(flag.CommandLine, fromEnv, "secure-cookies") {
+		*secure = true
 	}
 
 	level := slog.LevelInfo
@@ -82,6 +186,7 @@ func main() {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	log.Info("aether starting", "version", version, "go", runtime.Version())
 
 	ctx, stop := ossignal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
@@ -192,6 +297,10 @@ func main() {
 		log.Error("media plane failed to start", "err", err)
 		os.Exit(1)
 	}
+	if publicIP != "" && media.Registry.Transport != nil {
+		media.Registry.Transport.PublicIP = publicIP
+		log.Info("media: announcing the public address", "public_ip", publicIP, "port", *mediaPort)
+	}
 	gw := signal.NewGateway(rooms.Registry, media.Registry, root, log)
 	if *dev {
 		gw.Origin = []string{"*"}
@@ -266,6 +375,18 @@ func main() {
 	// name the way a company address book works. Empty by default; naming a
 	// public provider here is refused rather than honoured.
 	identityModule.Service.OrgDomains = settingsModule.Service.OrgDomains
+	// Outgoing email, through whatever SMTP server the operator names.
+	var mailQueue *mail.Queue
+	switch {
+	case smtpCfg == nil:
+		log.Info("email: off (no -smtp-addr): password reset is not offered")
+	case linkBase == "":
+		log.Warn("email: -smtp-addr is set but -public-url is not, so links cannot be written: password reset is not offered")
+	default:
+		mailQueue = mail.NewQueue(smtpCfg, log)
+		identityModule.Service.SendReset = resetSender(mailQueue, linkBase)
+		log.Info("email: on", "server", *smtpAddr, "from", *smtpFrom, "links", linkBase)
+	}
 	// And the other half of that policy: whether a conversation may cross the
 	// organisation's boundary at all. Enforced where conversations are made,
 	// not only where the directory draws results.
@@ -288,6 +409,28 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("modules started", "order", k.Order())
+	// Scheduled snapshots, on a connection of their own (see internal/platform/backup).
+	if *backupEvery > 0 {
+		go func() {
+			t := time.NewTicker(*backupEvery)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					res, err := backup.Run(ctx, bopts)
+					if err != nil {
+						backupFailures.Add(1)
+						log.Error("scheduled backup failed", "err", err)
+						continue
+					}
+					backupLastOK.Store(time.Now().Unix())
+					log.Info("scheduled backup", "file", res.File, "bytes", res.Bytes, "files_copied", res.FilesCopied, "files_pruned", res.FilesPruned)
+				}
+			}
+		}()
+	}
 	if *allowSignup {
 		log.Warn("self-registration is OPEN: anyone who can reach this server " +
 			"can create a member account. Pass -allow-signup=false to close it.")
@@ -341,19 +484,41 @@ func main() {
 		// announces -- NOT LANAddresses()[0], which returned the WSL virtual
 		// adapter (172.24.64.1) and pointed every relay URL at a subnet that
 		// exists only inside this machine.
-		publicIP := bindHost
-		if ip := net.ParseIP(publicIP); ip == nil || ip.IsUnspecified() || ip.IsLoopback() {
-			publicIP = ""
+		relayIP := publicIP
+		if relayIP == "" {
+			relayIP = bindHost
+		}
+		if ip := net.ParseIP(relayIP); ip == nil || ip.IsUnspecified() || ip.IsLoopback() {
+			relayIP = ""
 			if routed := sfu.DefaultAddressPolicy(log).BindAddresses(); len(routed) > 0 {
-				publicIP = routed[0]
+				relayIP = routed[0]
 			} else if lan := LANAddresses(); len(lan) > 0 {
-				publicIP = lan[0]
+				relayIP = lan[0]
 			}
 		}
-		if publicIP == "" {
+		// The relay forwards to Aether's media server and nowhere else: the
+		// addresses the media plane announces or binds, read fresh each time
+		// (a laptop's address changes as it moves between networks). Every
+		// other peer -- localhost, the private network, a cloud metadata
+		// address -- is refused (see internal/relay, Options.Allow).
+		mediaOwns := func(ip net.IP) bool {
+			own := []string{publicIP, relayIP, bindHost}
+			own = append(own, media.Registry.Addrs.BindAddresses()...)
+			for _, o := range own {
+				if p := net.ParseIP(o); p != nil && !p.IsUnspecified() && p.Equal(ip) {
+					return true
+				}
+			}
+			return false
+		}
+		if relayIP == "" {
 			log.Warn("relay: no routable address found; relay disabled")
 		} else {
-			if r, err := relay.New(publicIP, base64.StdEncoding.EncodeToString(secret), log); err != nil {
+			ports := relay.DefaultPorts
+			ports.AltTCP = *relayAltTCP
+			if r, err := relay.NewWithOptions(relayIP, base64.StdEncoding.EncodeToString(secret), log, relay.Options{
+				Ports: ports, RelayMin: relayMin, RelayMax: relayMax, Allow: mediaOwns,
+			}); err != nil {
 				log.Warn("relay: not started; calls will need a direct UDP path", "err", err)
 			} else {
 				relaySrv = r
@@ -401,7 +566,7 @@ func main() {
 
 	// Gzip innermost, so the access log counts the bytes that went on the
 	// wire, not the bytes before compression.
-	handler := httpx.Recover(log, httpx.SecurityHeaders(*secure, httpx.Logging(log, httpx.Gzip(mux))))
+	handler := httpx.Recover(log, httpx.SecurityHeaders(*secure, httpx.Logging(log, httpx.BodyTypes(httpx.Gzip(mux)))))
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -415,7 +580,59 @@ func main() {
 		TLSConfig: hardenedTLS(),
 	}
 
+	var metricsSrv *http.Server
+	if *metricsAddr != "" {
+		metricsSrv = &http.Server{Addr: *metricsAddr, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
+			Handler: metricsHandler(metricsDeps{root: root, rooms: rooms.Registry, media: media.Registry, gw: gw, db: db.DB})}
+		go func() {
+			log.Info("metrics: Prometheus text format at /metrics", "addr", *metricsAddr)
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("metrics listener failed", "addr", *metricsAddr, "err", err)
+			}
+		}()
+	}
+
+	// A certificate from an ACME authority: the server obtains and renews it,
+	// and a plain-HTTP listener answers the challenge and sends every other
+	// request to HTTPS.
+	var redirectSrv *http.Server
+	if len(domains) > 0 {
+		cache := *acmeCache
+		if cache == "" {
+			cache = filepath.Join(filepath.Dir(*dbPath), "acme")
+		}
+		m, err := newACME(acmeOptions{Domains: domains, Email: *acmeEmail, CacheDir: cache,
+			Directory: *acmeDirectory, CAFile: *acmeCA})
+		if err != nil {
+			log.Error("acme", "err", err)
+			os.Exit(1)
+		}
+		srv.TLSConfig = acmeTLS(m)
+		ha := *httpAddr
+		if ha == "" {
+			ha = ":80"
+		}
+		redirectSrv = &http.Server{Addr: ha, Handler: httpsRedirect(m, domains),
+			ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+		go func() {
+			log.Info("acme: plain HTTP for challenges and redirects", "addr", ha)
+			if err := redirectSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("http listener failed (ACME HTTP-01 challenges will fail)", "addr", ha, "err", err)
+			}
+		}()
+		go func() {
+			log.Info("listening", "addr", *addr, "web", *webDir, "scheme", "https", "acme", domains, "cache", cache)
+			if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("listen failed", "err", err)
+				os.Exit(1)
+			}
+		}()
+	}
+
 	go func() {
+		if len(domains) > 0 {
+			return // served above
+		}
 		if !*useTLS {
 			log.Info("listening", "addr", *addr, "web", *webDir, "scheme", "http")
 			// Said plainly, because the failure it causes looks like a bug in
@@ -466,6 +683,15 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+	if redirectSrv != nil {
+		_ = redirectSrv.Shutdown(shutdownCtx)
+	}
+	if metricsSrv != nil {
+		_ = metricsSrv.Shutdown(shutdownCtx)
+	}
+	if mailQueue != nil {
+		mailQueue.Close()
+	}
 	if err := k.Stop(shutdownCtx); err != nil {
 		log.Error("shutdown errors", "err", err)
 	}

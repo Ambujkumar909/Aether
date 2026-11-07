@@ -1,0 +1,13 @@
+# Only the sources the image is built from. Never the database, keys,
+# uploaded files, binaries or local tooling.
+*
+!engine/
+!web/
+!THIRD_PARTY_NOTICES.md
+engine/files
+engine/**/*.db
+engine/**/*.db-*
+engine/**/*.pem
+engine/**/*.exe
+web/node_modules
+**/*.log

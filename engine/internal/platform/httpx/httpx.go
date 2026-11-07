@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -120,6 +122,21 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // Logging records one line per request.
+// responses counts every response Logging sees, by status code, for
+// /metrics. Indexed by code: a fixed array, so the label set is bounded.
+var responses [600]atomic.Uint64
+
+// ResponseCounts returns the count of each status code served so far.
+func ResponseCounts() map[int]uint64 {
+	out := make(map[int]uint64)
+	for code := range responses {
+		if n := responses[code].Load(); n > 0 {
+			out[code] = n
+		}
+	}
+	return out
+}
+
 func Logging(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -127,6 +144,9 @@ func Logging(log *slog.Logger, next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 		if sw.status == 0 {
 			sw.status = http.StatusOK
+		}
+		if sw.status >= 100 && sw.status < len(responses) {
+			responses[sw.status].Add(1)
 		}
 		lvl := slog.LevelDebug
 		if sw.status >= 500 {
@@ -137,6 +157,27 @@ func Logging(log *slog.Logger, next http.Handler) http.Handler {
 		log.Log(r.Context(), lvl, "http",
 			"method", r.Method, "path", r.URL.Path, "status", sw.status,
 			"bytes", sw.bytes, "ms", time.Since(start).Milliseconds())
+	})
+}
+
+// BodyTypes refuses an API request body that is neither JSON nor a multipart
+// upload. A cross-site HTML form posts text/plain without asking first, and
+// text/plain can be shaped to parse as JSON -- {"email":"a","password":"b="}
+// -- so every JSON endpoint without its own CSRF check (signing in, asking
+// for a reset link) would read it: a hostile page could sign its visitor into
+// the attacker's account. application/json cannot be sent cross-site without
+// a CORS preflight, which this server never answers; a form's multipart or
+// urlencoded body never parses as JSON; and uploads require the CSRF header.
+func BodyTypes(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength != 0 && r.Body != nil && r.Body != http.NoBody && strings.HasPrefix(r.URL.Path, "/api/") {
+			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if mt != "application/json" && mt != "multipart/form-data" {
+				Error(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "send the body as application/json")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

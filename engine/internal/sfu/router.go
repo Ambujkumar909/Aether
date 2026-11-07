@@ -34,8 +34,11 @@ type Router struct {
 	closed bool
 	wg     sync.WaitGroup
 
-	// Permit gates every fan-out. See MayForward.
-	Permit MayForward
+	// permit gates every fan-out (see MayForward). Atomic, because every
+	// join sets it while media already flows through permits: as a plain
+	// field it was a data race, two people joining at once each writing it
+	// (found by -race on Linux).
+	permit atomic.Pointer[MayForward]
 
 	waking atomic.Bool // a wake rebind is pending (wake)
 }
@@ -118,10 +121,17 @@ func (r *Router) Stop() {
 // permits asks the transport whether this peer may send this kind of media.
 // No hook installed means no meeting controls, so everything is forwarded.
 func (r *Router) permits(peerID, kind string) bool {
-	if r.Permit == nil {
+	p := r.permit.Load()
+	if p == nil || *p == nil {
 		return true
 	}
-	return r.Permit(peerID, kind)
+	return (*p)(peerID, kind)
+}
+
+// SetPermit installs the meeting-controls hook. Safe to call at any time,
+// from any goroutine, while media flows.
+func (r *Router) SetPermit(f MayForward) {
+	r.permit.Store(&f)
 }
 
 // forwardKind names what a track counts as for the purpose of meeting
@@ -537,6 +547,14 @@ type DownstreamStat struct {
 	ViewportW  int    `json:"viewportW"`
 	ViewportH  int    `json:"viewportH"`
 	Visible    bool   `json:"visible"`
+}
+
+// Counts is the size of the media plane, cheap enough to scrape: Stats walks
+// every feed, which is quadratic in a large meeting.
+func (r *Router) Counts() (peers, tracks int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.peers), len(r.tracks)
 }
 
 // Stats collects a snapshot.

@@ -279,3 +279,50 @@ func TestMediaBindsOnlyTheNamedAddresses(t *testing.T) {
 		t.Fatalf("nil addrs should bind exactly the wildcard, got %d sockets", len(u))
 	}
 }
+
+// Behind a 1:1 NAT (a container, a cloud VM) the server's own interface
+// address is unreachable from outside: every host candidate must carry the
+// public address instead, on the same port, and the private one must not
+// appear at all. Gathered by a real pion peer on the real transport.
+func TestPublicIPReplacesTheBoundAddressInEveryCandidate(t *testing.T) {
+	port := freePort(t)
+	tr, err := ListenMedia([]string{"127.0.0.1"}, port, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	tr.PublicIP = "203.0.113.7"
+	// What a container runs on: the bound address is not loopback there,
+	// but the rewrite is the same; loopback candidates are on for the test.
+	tr.wildcard = true
+
+	api, err := newAPI(nil, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc, err := api.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	if _, err := pc.CreateDataChannel("probe", nil); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := webrtc.GatheringCompletePromise(pc)
+	if err := pc.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	sdp := pc.LocalDescription().SDP
+	want := fmt.Sprintf("203.0.113.7 %d typ host", port)
+	if !strings.Contains(sdp, want) {
+		t.Fatalf("no host candidate on the public address %q in:\n%s", want, sdp)
+	}
+	if strings.Contains(sdp, "127.0.0.1 ") {
+		t.Fatalf("the bound address still appears in the offer:\n%s", sdp)
+	}
+}

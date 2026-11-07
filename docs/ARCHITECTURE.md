@@ -5417,3 +5417,227 @@ the CLAUDE.md rule that every ordering has a total tiebreak.
 
 **Corrections to §7.** It still listed recording, breakout rooms and remote
 control as not built; all three were built (§6bj, §6bc, §4c).
+
+### 6by. Production readiness, part 1: one hardened container, and what Linux found
+
+The deployment target is one container on an Ubuntu server (`Dockerfile`,
+`compose.yaml`, `deploy/README.md`). Building it found four defects, one of
+them severe.
+
+**The relay was an open proxy (severe).** `/api/identity/config` is public
+(the sign-in screen reads it) and handed every caller a TURN credential, and
+the relay used pion's default permission handler, which forwards to any
+address. Anyone on the internet could relay UDP and TCP into the server's own
+network: services bound to localhost, the private subnet, a cloud metadata
+address. Two layers now: credentials are minted only for a session that
+verifies (`TestConfigMintsARelayCredentialOnlyForASignedInSession`; the old
+handler gave a stranger `iceServers`), and the relay's `Options.Allow` permits
+only the addresses Aether's media server announces or binds, read fresh each
+time; every other CreatePermission and ChannelBind is refused and logged. The
+tests drive a real pion TURN client: allocate, send to the media server (the
+bytes arrive), send to anything else (refused, nothing arrives), and five
+internal and metadata addresses are each refused. With pion's admit-all
+handler planted back, all three fail and name each address it accepted.
+
+**Post-quantum TLS was switched off by our own policy.** `hardenedTLS` named
+its curves (X25519, P-256), and naming curves removes the ones not named, so
+the hybrid ML-KEM exchange every current browser offers was never used. It now
+leads the list (`X25519MLKEM768`, then X25519, P-256); the handshake test
+asserts a client offering it gets it and a classical client still connects
+(the old policy fails: "key exchange X25519").
+
+**A data race on every join, invisible on Windows.** The Go suite had only
+ever run on Windows. Under `-race` on Linux it reported every join writing
+`Router.Permit` (the meeting-controls hook) while media read it, and two joins
+at once writing it together. It is now an atomic pointer behind `SetPermit`;
+`TestPermitMayBeSetWhileMediaFlows` reports the race against a plain field.
+The same run found the Windows app's package leaking into Linux builds (ten
+files without `//go:build windows`); it is now Windows-only. The image's
+`test` stage runs the whole suite on Linux under `-race`: 17 packages pass.
+
+**Containers need an announced address.** Inside a container the server's
+only interface is a private bridge address. `-public-ip` makes every host
+candidate carry the public address on the same port (pion address rewrite;
+`TestPublicIPReplacesTheBoundAddressInEveryCandidate`, which fails with the
+rewrite removed), and the relay announces it too. Relay allocations use a
+fixed range (`-relay-ports`, 49160-49359 in the image) that a firewall and
+Docker can publish, where they used any free port. The relay's TCP/443 path is
+off in a container (`-relay-alt-tcp 0`): the web server holds 443.
+
+**What the container is.** Distroless, no shell, about 14.5 MB, user 65532,
+static binary built `-trimpath` with the pinned toolchain, read-only root,
+every capability dropped, `no-new-privileges`, a process limit, rotated logs,
+state only on the `/data` volume. Every flag also reads `AETHER_*` from the
+environment (the command line wins; a malformed value stops the server and
+names the variable). HTTPS turns secure cookies on unless explicitly turned
+off. `-acme-domain` obtains and renews a Let's Encrypt certificate, requesting
+only whitelisted hostnames (a crafted SNI never reaches the authority), with
+plain HTTP answering challenges and redirecting to HTTPS only on a named host.
+`-healthcheck` lets the image check itself without curl.
+
+**Backups.** The running server snapshots itself (`VACUUM INTO` on a
+read-only connection of its own, so its one writer is never stopped; checked
+with `integrity_check` before it is kept) every 6 hours, keeping 28, and
+mirrors uploaded files (new blobs copied, deleted ones removed, partial uploads
+ignored). `-backup-now` and `-restore` run beside it. The tests take three
+snapshots while a writer commits continuously and fail if the writer stalls;
+the restore drill backs up, changes, restores and reopens with the server's
+own `database.Open`. On the binary end to end: sign up, back up, sign up
+again, restore -- the first account signs in, the second does not exist.
+
+**Calls on a slow link silently fell back to the socket (two client bugs,
+found by running the browser harnesses against the container).** In the
+container every call stayed on TCP socket media: the browsers' publisher
+connections sat in `have-local-offer` with ICE `new`, the server refused their
+candidates ("remote description is not set"), and after 6 s the fallback took
+over. A goroutine dump showed the gateway idle, not stuck; a server-side
+`sdp in` debug line (kept) showed the offer never arrived; the browser's
+WebSocket frames, decoded through DevTools, showed why. The client coalesces
+frames for 5 ms and then sent the batch -- or threw it away if the meeting
+socket was not yet open. The offer is written moments after joining, so
+wherever the socket opened slower than the camera started (the container's
+port proxy, a loaded machine, a distant user) the offer was discarded, and
+dropping an encoded frame also desynchronises the string dictionary every
+later frame is encoded against. Frames now wait while the socket connects and
+go when it opens (bounded at 4,096; past that the socket is closed rather than
+silently corrupted). The second bug was the mirror image: the server subscribes
+a newcomer to everyone already publishing the moment they join, and that
+offer, and its candidates, arrived while the client was still fetching relay
+credentials, before its connections existed; `MediaPlane` dropped them, so the
+newcomer received nobody's camera. They are now kept (the latest offer, and
+candidates up to the existing bound) and applied when `start()` creates the
+connections.
+
+`tools/e2e/joinrace.e2e.mjs` reproduces both: a slow link (900 ms emulated
+latency) and a slow socket (the meeting socket opens 2.5 s late, everything
+else at full speed). Against the previous client: the slow socket left both
+publishers in `have-local-offer` and fell back after 6 s, exactly the
+container's symptom, and the slow link left the newcomer with 0 bytes of
+media; with the fixes every check passes. `web/src/rtcearly.test.mjs` drives
+the real `MediaPlane` with a peer connection that enforces the real ordering
+rule (three of its four tests fail on the old file; the fourth, an offer after
+`start()`, passes on both, as it should).
+
+**A third: the fallback watchdog fell back on a network that works.** The
+container run then failed differently: A's subscriber went straight to socket
+media ("subscriber offered but not connecting") with 0 WebRTC bytes. The
+watchdog timed both connections from the client's own start. Somebody joining
+20 s after you brings your first subscriber offer at 20 s, and the next check
+saw "offered, not connected" while ICE was still doing its normal work. Each
+leg now has its own window: the publisher's from when it starts publishing,
+the subscriber's from its first offer, each until that leg connects once (a
+leg that connects and later drops is ICE-restarted; a terminal failure still
+falls back). A third scenario, "late joiner", covers it: B joins 8 s after A,
+whose link is slow, and A's answer is held 1.8 s as a slow link would hold it.
+On loopback, offer to connected takes milliseconds, so a check every 1.5 s
+rarely looked inside that window; through Docker it did. Against a copy of the
+fixed client with only the old watchdog spliced back in, it fails ("WebSocket
+media on: subscriber offered but not connecting", and B's WebRTC video
+collapses to 12 KB). With the fix, 25 of 25 pass, natively and twice against
+the hardened container.
+
+**What a 1.8 s round trip costs, measured.** In the container the emulated
+latency also reaches the media path (Docker's UDP port proxy; natively it does
+not). The selected candidate pair reads `currentRoundTripTime` 1.804 s: ICE
+connected 1.9 s after checking began (one round trip), DTLS 3.6 s after that
+(the two round trips of a DTLS 1.2 handshake), then the first RTP within
+milliseconds. So each leg takes ~5.5 s on such a link. A newcomer's subscriber
+can only start once the other side's publisher is up, so first video takes
+two legs, ~11 s. The harness had slept a fixed 14 s and measured A's
+subscriber a second after it connected. It now waits until video arrives (up
+to 45 s); a fallback still fails, because it is caught on the console and
+socket media never reaches the WebRTC counters. Room left on the table:
+the server offers existing participants a newcomer's tracks only when the
+first RTP arrives. Offering on the publisher's SDP would overlap the two legs
+and save one leg (~5.5 s here, ~1 RTT plus DTLS anywhere). Not built yet.
+
+**Operators can see it: Prometheus metrics.** `-metrics-addr` (`:9464` in
+the image, published to the host's loopback only) serves the text format with
+no dependency: meetings, participants, open meeting sockets, media peers and
+tracks, wire bytes by class and the efficiency ratio, HTTP responses by status
+code (a fixed array, so the label set is bounded), database up and pool waits,
+the last good backup and backup failures, Go runtime. Aggregates only -- no
+meeting, person or address in a label, so cardinality does not grow with
+50,000 people and nothing private leaves. The scrape uses a new
+`Router.Counts()`: `Stats()` walks every feed, quadratic in a large meeting.
+`deploy/aether-alerts.yml` alerts on the server down, the database down, no
+good backup for 13 h, a failed backup, >2% server errors and sustained 429s.
+The tests parse the output with a strict text-format parser (one HELP and
+TYPE per family, every sample inside its family, label syntax) and fail on a
+crafted version string that would inject a metric, an unchecked database ping,
+an uncounted response and a room id in a label (each planted and caught).
+
+**CI.** `.github/workflows/ci.yml`, actions pinned to commits: gofmt, vet and
+the race suite on Linux, govulncheck, the client tests, the production image
+with automatic certificates against Pebble, and seven browser harnesses in
+headless Chrome against the real server with email on.
+
+**Email, and password reset.** `internal/platform/mail` is stdlib SMTP to
+any server: TLS on 465 or STARTTLS required (a server that does not offer it
+is refused before credentials or mail cross), certificates verified, a CR or
+LF in an address or subject refused, the body quoted-printable, sent from a
+bounded background queue so no request waits on (or reveals by its timing) a
+mail server. Tested against a real SMTP server on a real socket; five planted
+faults (STARTTLS optional, line breaks allowed, a blocking enqueue, a
+non-idempotent close, verification off) each fail a test. Reset: the request
+answers the same words after the same 400 ms floor with or without an
+account; the link is a 256-bit token in the URL fragment (never sent to a
+server, so never in a log), stored as its SHA-256, one per account, 30
+minutes, consumed by one `DELETE ... RETURNING` so of twelve racing uses one
+wins; the password is checked before the link is spent; using it clears a
+lockout and ends every session; suspended and unknown accounts are mailed
+nothing; one account is mailed at most once a minute and one address may ask
+five times an hour. Links are built from `-public-url` (or the ACME domain),
+never from the request's Host header, which would let an attacker aim the
+link. Seven planted faults each fail a test. `tools/e2e/reset.e2e.mjs` runs it
+in a phone-sized browser against Mailpit (STARTTLS required): 20 checks,
+including the link working once, the token wiped from the address bar, both
+forms fitting 390 px with 44 px targets, the bounds, and the limit.
+
+**Login CSRF, closed.** `httpx.Decode` read any body as JSON whatever its
+type, and a cross-site `<form enctype="text/plain">` can produce
+`{"email":"a","password":"b="}`: a hostile page could sign its visitor into
+the attacker's account, or ask for reset mail. Every `/api/` body must now be
+`application/json` (which no page can send cross-site without a preflight
+this server never answers) or a multipart upload (never parses as JSON, and
+uploads require the CSRF header); anything else is 415 before a handler runs.
+Every harness already sent the type.
+
+**And a sign-in bug found on the way.** "Create an account" toggled an
+element that had been removed (`li-note`), so it threw halfway: the forms
+swapped, the title and the link did not. Nothing drove that button. The
+card's four views now go through one `authMode`, and the reset harness clicks
+both ways; against the previous client it fails there.
+
+**Open: a subscriber that Chrome wedges.** With email on and an admin
+created, the native battery showed joinrace's slow-link scenario failing
+about one run in twenty: the newcomer's subscriber connection answered, then
+sat in gathering forever -- not one local candidate (`getStats` lists none),
+ICE "new" -- and the call fell back to socket media after 6 s. Every case had
+the same shape: the newcomer's first offer applied the instant the connection
+existed, renegotiated ~33 ms later, and DevTools network emulation on that
+page; never in ~150 runs of the scenarios without emulation on the newcomer.
+Ruled out in turn: the candidate pool (16 runs with and 16 without: none
+failed either way), the early candidate flush, the server's offers (same
+shape for the peer that connected), and a renegotiation race (640 isolated
+trials in one page -- pool on and off, relay credentials, a second connection
+negotiating at once, the same emulation: not one wedge). An ICE restart was
+built (client asks after 2.5 s without a candidate, server re-offers with new
+credentials; tests passed and failed on planted faults) and then removed: on a
+wedged connection the restart offer is applied and answered and gathering
+still never starts, so it rescued nothing. Recovery would mean a new
+subscriber connection on both ends; not built while the wedge cannot be
+triggered on demand. Until then the socket fallback keeps the call working,
+and joinrace retries a scenario once on exactly that signature, saying so;
+any other failure fails.
+
+**Open: a sender's bandwidth estimate that sometimes starts starved.** The
+video harness (HD steady over the last 5 s of 20) fails about half the time,
+natively and in the container alike: from the first second Chrome reports the
+camera "bandwidth"-limited -- no loss in its receiver reports, the direct host
+path chosen every time -- and either climbs to 1280x720 only after ~17 s or
+collapses to nothing. Passing runs reach HD in 2 s. It predates this batch:
+this morning's committed server failed 4 of 8, today's 4 of 8; the morning's
+client 2 of 6, today's 3 of 6. Earlier batteries passed it by luck. The next
+step is the publisher's feedback path (transport-wide congestion control from
+the SFU) measured run against run; recorded in docs/RESUME.md.

@@ -27,7 +27,7 @@ import {
 } from './wire.js';
 import { MediaPlane } from './rtc.js';
 import {
-  session, login, logout, resume, signup, serverConfig,
+  session, login, logout, resume, signup, serverConfig, forgotPassword, resetPassword,
   telemetry, scheduling, ApiError,
 } from './api.js';
 import {
@@ -405,9 +405,21 @@ function startRateReadout(ws) {
 // frame and one TLS record instead of three or four.
 const COALESCE_MS = 15;
 
+// Frames waiting for the socket. Bounded (rule 2): a socket that never opens
+// must not grow it without limit.
+const OUTBOX_MAX = 4096;
+
 function send(encode) {
   const w = new Writer(state.dicts.tx);
   encode(w);
+  if (state.outbox.length >= OUTBOX_MAX) {
+    // Dropping a frame would desynchronise the string dictionary every later
+    // frame is encoded against, so a socket this far behind is ended instead.
+    console.error('meeting socket: outbox full before the socket opened; closing it');
+    state.outbox = [];
+    state.ws?.close();
+    return;
+  }
   state.outbox.push(w.bytes());
   meter.jsonEquivalent += JSON_BYTES_PER_EVENT + WS_FRAMING_CLIENT;
   if (!state.outTimer) state.outTimer = setTimeout(flush, COALESCE_MS);
@@ -415,8 +427,16 @@ function send(encode) {
 
 function flush() {
   state.outTimer = null;
-  if (!state.outbox.length || state.ws?.readyState !== WebSocket.OPEN) {
-    state.outbox = [];
+  if (!state.outbox.length) return;
+  // Still connecting: keep everything; onopen flushes it. These frames once
+  // went in the bin, and the publisher's offer is usually among the first:
+  // wherever the socket opened slower than the camera started (a container,
+  // a loaded machine) the offer was never sent, the candidates that followed
+  // were refused, and every call fell back to the socket after 6 s. Dropping
+  // a frame also desynchronises the string dictionary later frames use.
+  if (state.ws?.readyState === WebSocket.CONNECTING) return;
+  if (state.ws?.readyState !== WebSocket.OPEN) {
+    state.outbox = []; // closed: this meeting socket is gone
     return;
   }
   const frames = state.outbox;
@@ -439,6 +459,8 @@ function connect(room, name) {
 
   ws.onopen = () => {
     setLink('ok');
+    // Anything written before the socket opened goes now, in order.
+    flush();
     // A one byte heartbeat. Not a JSON object with a timestamp.
     setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) send(encodePing);
@@ -1225,37 +1247,56 @@ async function startMediaPlane() {
   // WebRTC mode: arm the automatic fallback. Checked against live state at
   // fire time, so a connection that comes up in the meantime cancels it.
   {
-    const startedAt = Date.now();
+    // Each leg's window starts when that leg starts -- the publisher when we
+    // begin publishing, the subscriber when the server first offers it -- and
+    // applies until that leg has connected once. Both used to be timed from
+    // our own start: somebody joining 20 s after us brought the first
+    // subscriber offer at 20 s, and the very next check read "offered but not
+    // connecting" while ICE was still doing its normal sub-second work -- a
+    // fallback on a network that works (joinrace.e2e, "late joiner"). And a
+    // camera turned on long after joining was judged against the same old
+    // clock. A leg that connected and later drops is ICE-restarted, and a
+    // terminal failure still falls back (onState above), so a blip is not a
+    // permanent switch to the socket.
+    let pubSince = 0;
+    let subOfferedAt = 0;
+    let pubUp = false;
+    let subUp = false;
     const connected = (pc) =>
       pc && (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
     const check = () => {
       if (state.wsMediaOn) return;
       const sub = state.media?.sub;
       const pub = state.media?.pub;
+      const now = Date.now();
 
       // Decisive: the publisher failed outright.
       if (pub && pub.iceConnectionState === 'failed') {
         enableWSMedia('publisher ICE failed');
         return;
       }
+      if (connected(pub)) pubUp = true;
+      if (connected(sub)) subUp = true;
       // We are publishing something and the publisher still has not connected
       // after the window: do not wait the ~30 s it takes ICE to say "failed".
       // A working network connects the publisher in well under a second, so
       // this never fires on one that works.
       const publishing = !!state.localStream?.getTracks().length;
-      if (publishing && pub && !connected(pub) && Date.now() - startedAt >= WS_MEDIA_FALLBACK_MS) {
+      if (publishing && pub && !pubSince) pubSince = now;
+      if (!pubUp && pubSince && now - pubSince >= WS_MEDIA_FALLBACK_MS) {
         enableWSMedia(`publisher not connected after ${WS_MEDIA_FALLBACK_MS} ms`);
         return;
       }
       // We were offered a subscription and it will not connect: peers cannot
       // reach us directly.
-      if (sub?.remoteDescription && !connected(sub) && Date.now() - startedAt >= WS_MEDIA_FALLBACK_MS) {
+      if (sub?.remoteDescription && !subOfferedAt) subOfferedAt = now;
+      if (!subUp && subOfferedAt && now - subOfferedAt >= WS_MEDIA_FALLBACK_MS) {
         enableWSMedia('subscriber offered but not connecting');
         return;
       }
-      setTimeout(check, 1500);
+      if (!(pubUp && subUp)) setTimeout(check, 500);
     };
-    setTimeout(check, WS_MEDIA_FALLBACK_MS);
+    setTimeout(check, 500);
   }
 }
 
@@ -7570,6 +7611,45 @@ function wireHome() {
   });
 }
 
+// The sign-in card's views: sign in, create an account, ask for a reset link,
+// choose a new password. One place decides what each shows. (The swap used to
+// toggle an element that no longer existed, so it threw halfway: the forms
+// changed but the labels and the tagline did not.)
+let authView = 'login';
+let authCfg = { allowSignup: false, passwordReset: false };
+let resetToken = '';
+const AUTH_FORMS = { login: 'login-form', signup: 'signup-form', forgot: 'forgot-form', reset: 'reset-form' };
+const AUTH_TAGS = {
+  login: 'Access your account',
+  signup: 'Create your account',
+  forgot: 'Reset your password',
+  reset: 'Choose a new password',
+};
+function authMode(view, note = '') {
+  authView = view;
+  for (const [v, id] of Object.entries(AUTH_FORMS)) $(id).classList.toggle('hidden', v !== view);
+  for (const id of ['li-error', 'su-error', 'fp-error', 'rp-error', 'fp-done']) $(id).classList.add('hidden');
+  $('li-done').textContent = note;
+  $('li-done').classList.toggle('hidden', !note);
+  document.querySelector('.auth-tagline').textContent = AUTH_TAGS[view];
+  // From sign-in: create an account (where allowed). From anywhere else: back.
+  const back = view !== 'login';
+  $('swap-text').textContent = view === 'signup' ? 'Already have an account?' : back ? '' : 'New here?';
+  $('swap-btn').textContent = back ? 'Back to sign in' : 'Create an account';
+  $('auth-swap').classList.toggle('hidden', !back && !authCfg.allowSignup);
+  $({ login: 'li-email', signup: 'su-name', forgot: 'fp-email', reset: 'rp-pass' }[view])?.focus();
+}
+
+// A reset link carries its token in the fragment, which never reaches a
+// server. It is taken once and wiped from the address bar and the history,
+// so it is not left on screen, in a shared screenshot, or under Back.
+function takeResetToken() {
+  const m = /^#reset=([A-Za-z0-9_-]{1,128})$/.exec(location.hash);
+  if (!m) return '';
+  history.replaceState(null, '', location.pathname + location.search);
+  return m[1];
+}
+
 function wireAuth() {
   const form = $('login-form');
   const err = $('li-error');
@@ -7605,30 +7685,87 @@ function wireAuth() {
     }
   };
 
-  $('li-forgot').onclick = () =>
-    toast('Password reset is not wired yet — ask an administrator to set a new one.');
-
   // Which forms exist at all is the server's call, so ask before offering.
-  serverConfig().then((cfg) => {
-    $('auth-swap').classList.toggle('hidden', !cfg.allowSignup);
-    if (cfg.minPasswordLength) {
-      $('su-hint').textContent =
-        `At least ${cfg.minPasswordLength} characters. Length matters more than symbols.`;
+  serverConfig().then((c) => {
+    authCfg = c;
+    if (authView === 'login') $('auth-swap').classList.toggle('hidden', !c.allowSignup);
+    if (c.minPasswordLength) {
+      const hint = `At least ${c.minPasswordLength} characters. Length matters more than symbols.`;
+      $('su-hint').textContent = hint;
+      $('rp-hint').textContent = hint;
     }
   });
 
-  let creating = false;
-  $('swap-btn').onclick = () => {
-    creating = !creating;
-    $('login-form').classList.toggle('hidden', creating);
-    $('signup-form').classList.toggle('hidden', !creating);
-    $('li-note').classList.toggle('hidden', creating);
-    $('swap-text').textContent = creating ? 'Already have an account?' : 'New here?';
-    $('swap-btn').textContent = creating ? 'Sign in' : 'Create an account';
-    document.querySelector('.auth-tagline').textContent = creating
-      ? 'Create your account'
-      : 'Access your account';
-    (creating ? $('su-name') : $('li-email')).focus();
+  $('li-forgot').onclick = () => {
+    if (!authCfg.passwordReset) {
+      toast('This server cannot send email. Ask an administrator to set a new password.');
+      return;
+    }
+    $('fp-email').value = $('li-email').value.trim();
+    authMode('forgot');
+  };
+
+  $('swap-btn').onclick = () => authMode(authView === 'login' ? 'signup' : 'login');
+
+  const fpErr = $('fp-error');
+  $('forgot-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('fp-submit');
+    btn.disabled = true;
+    fpErr.classList.add('hidden');
+    $('fp-done').classList.add('hidden');
+    try {
+      const res = await forgotPassword($('fp-email').value.trim());
+      $('fp-done').textContent = res?.status || 'If an account uses that address, a link is on its way.';
+      $('fp-done').classList.remove('hidden');
+    } catch (e2) {
+      fpErr.textContent =
+        e2 instanceof ApiError && e2.status === 429
+          ? 'Too many requests from here. Try again later.'
+          : e2 instanceof ApiError
+            ? e2.message
+            : 'Something went wrong. Try again.';
+      fpErr.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  const rpErr = $('rp-error');
+  $('reset-form').onsubmit = async (e) => {
+    e.preventDefault();
+    rpErr.classList.add('hidden');
+    if ($('rp-pass').value !== $('rp-pass2').value) {
+      rpErr.textContent = 'The two passwords are different.';
+      rpErr.classList.remove('hidden');
+      return;
+    }
+    const btn = $('rp-submit');
+    btn.disabled = true;
+    try {
+      await resetPassword(resetToken, $('rp-pass').value);
+      resetToken = '';
+      $('rp-pass').value = $('rp-pass2').value = '';
+      session.clear();
+      authMode('login', 'Password changed. Sign in with the new one.');
+    } catch (e2) {
+      if (e2 instanceof ApiError && e2.code === 'reset_invalid') {
+        resetToken = '';
+        authMode('forgot');
+        fpErr.textContent = 'That link has expired or was already used. Ask for a new one here.';
+        fpErr.classList.remove('hidden');
+      } else {
+        rpErr.textContent =
+          e2 instanceof ApiError && e2.status === 429
+            ? 'Too many attempts. Wait a moment and try again.'
+            : e2 instanceof ApiError
+              ? e2.message
+              : 'Something went wrong. Try again.';
+        rpErr.classList.remove('hidden');
+      }
+    } finally {
+      btn.disabled = false;
+    }
   };
 
   const suErr = $('su-error');
@@ -7688,8 +7825,12 @@ syncControls();
 
 // A reload should not force a sign-in. The session cookie is still valid, so
 // ask the server who we are before showing a login form nobody needs.
+resetToken = takeResetToken();
 resume().then((u) => {
-  if (u) enterHome();
+  if (resetToken) {
+    show('auth');
+    authMode('reset');
+  } else if (u) enterHome();
   else show('auth');
 });
 

@@ -98,6 +98,21 @@ func (p Ports) plan() []struct {
 	return out
 }
 
+// Options is everything about a relay beyond its address and secret.
+type Options struct {
+	Ports Ports
+	// RelayMin and RelayMax bound the ports allocations are made on. Zero
+	// means any free port, which a container or a firewall cannot publish;
+	// a deployment names a range and opens exactly that.
+	RelayMin, RelayMax uint16
+	// Allow says which peer addresses a client may relay to. Nil allows
+	// none. Aether's only legitimate relay peer is its own media server, so
+	// the deployment allows exactly the addresses it announces; anything
+	// else (localhost, a private network, a cloud metadata address) is the
+	// relay being used as a proxy into the server's network.
+	Allow func(net.IP) bool
+}
+
 // New starts the relay. publicIP is the address clients reach it on -- the same
 // LAN address the web server advertises. secret is any high-entropy string;
 // the same value mints and verifies credentials, so it never leaves the server.
@@ -105,6 +120,8 @@ func (p Ports) plan() []struct {
 // A listener that fails to bind is logged and skipped rather than fatal: 443
 // may be privileged or taken, and a relay on 3478 alone is still better than
 // none. Only a total failure to bind anything is an error.
+//
+// New allows relaying only to publicIP itself; NewWithOptions takes the rule.
 func New(publicIP, secret string, log *slog.Logger) (*Server, error) {
 	return NewWithPorts(publicIP, secret, log, DefaultPorts)
 }
@@ -113,6 +130,16 @@ func New(publicIP, secret string, log *slog.Logger) (*Server, error) {
 // to avoid the fixed production ports; a deployment behind another service on
 // 443 would too.
 func NewWithPorts(publicIP, secret string, log *slog.Logger, ports Ports) (*Server, error) {
+	own := net.ParseIP(publicIP)
+	return NewWithOptions(publicIP, secret, log, Options{
+		Ports: ports,
+		Allow: func(ip net.IP) bool { return own != nil && ip.Equal(own) },
+	})
+}
+
+// NewWithOptions starts a relay with every option chosen by the caller.
+func NewWithOptions(publicIP, secret string, log *slog.Logger, opt Options) (*Server, error) {
+	ports := opt.Ports
 	if log == nil {
 		log = slog.Default()
 	}
@@ -125,9 +152,31 @@ func NewWithPorts(publicIP, secret string, log *slog.Logger, ports Ports) (*Serv
 
 	s := &Server{secret: secret, publicIP: publicIP, log: log, ports: ports}
 
-	gen := &pion.RelayAddressGeneratorStatic{
+	var gen pion.RelayAddressGenerator = &pion.RelayAddressGeneratorStatic{
 		RelayAddress: net.ParseIP(publicIP),
 		Address:      "0.0.0.0",
+	}
+	if opt.RelayMin > 0 || opt.RelayMax > 0 {
+		if opt.RelayMin == 0 || opt.RelayMax < opt.RelayMin {
+			return nil, fmt.Errorf("relay: port range %d-%d is not a range", opt.RelayMin, opt.RelayMax)
+		}
+		gen = &pion.RelayAddressGeneratorPortRange{
+			RelayAddress: net.ParseIP(publicIP),
+			Address:      "0.0.0.0",
+			MinPort:      opt.RelayMin,
+			MaxPort:      opt.RelayMax,
+		}
+	}
+	// Every CreatePermission and ChannelBind is checked: the relay forwards
+	// only to addresses the deployment named. Refusals are logged, because a
+	// refused peer is either a misconfiguration or somebody probing.
+	allow := opt.Allow
+	permit := func(client net.Addr, peer net.IP) bool {
+		if allow != nil && allow(peer) {
+			return true
+		}
+		log.Warn("relay: refused a peer the media server does not own", "client", client.String(), "peer", peer.String())
+		return false
 	}
 
 	var packetConfigs []pion.PacketConnConfig
@@ -146,6 +195,7 @@ func NewWithPorts(publicIP, secret string, log *slog.Logger, ports Ports) (*Serv
 			packetConfigs = append(packetConfigs, pion.PacketConnConfig{
 				PacketConn:            c,
 				RelayAddressGenerator: gen,
+				PermissionHandler:     permit,
 			})
 		} else {
 			l, err := net.Listen("tcp4", addr)
@@ -157,6 +207,7 @@ func NewWithPorts(publicIP, secret string, log *slog.Logger, ports Ports) (*Serv
 			listenerConfigs = append(listenerConfigs, pion.ListenerConfig{
 				Listener:              l,
 				RelayAddressGenerator: gen,
+				PermissionHandler:     permit,
 			})
 		}
 		bound = append(bound, fmt.Sprintf("%s/%d", p.network, p.port))
@@ -183,8 +234,11 @@ func NewWithPorts(publicIP, secret string, log *slog.Logger, ports Ports) (*Serv
 	}
 	s.inner = inner
 
-	log.Info("relay: TURN listening", "public_ip", publicIP, "on", bound,
-		"note", "media falls back through here when the network blocks UDP; 443 is the path that survives")
+	note := "media falls back through here when the network blocks UDP; 443 is the path that survives"
+	if ports.AltTCP == 0 {
+		note = "media falls back through here when the network blocks UDP (no TCP/443 path: the web server holds 443)"
+	}
+	log.Info("relay: TURN listening", "public_ip", publicIP, "on", bound, "note", note)
 	return s, nil
 }
 

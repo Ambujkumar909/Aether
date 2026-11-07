@@ -172,7 +172,7 @@ func TestAttendanceListAtScale(t *testing.T) {
 		}
 	}
 	t.Logf("plan: %s worst of 50 lookups over 200k rows: %v", plan, worst)
-	if worst > 50*time.Millisecond {
+	if worst > 50*time.Millisecond && !raceEnabled { // 3 ms measured without -race
 		t.Fatalf("worst lookup %v", worst)
 	}
 }

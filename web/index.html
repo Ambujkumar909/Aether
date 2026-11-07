@@ -127,6 +127,7 @@
           <p class="auth-tagline">Access your account</p>
 
           <form id="login-form" autocomplete="on">
+            <div class="auth-ok hidden" id="li-done" role="status"></div>
             <div class="uline">
               <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><use href="#i-mail" /></svg>
               <input id="li-email" type="email" placeholder="Email" autocomplete="username" required />
@@ -175,6 +176,41 @@
                 <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
               </span>
               <span class="pill-text">Create account</span>
+            </button>
+          </form>
+
+          <form id="forgot-form" class="hidden" autocomplete="on">
+            <p class="hint">Enter the email you sign in with. If it has an account, a link to choose a new password is sent there.</p>
+            <div class="uline">
+              <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><use href="#i-mail" /></svg>
+              <input id="fp-email" type="email" placeholder="Email" autocomplete="username" maxlength="320" required />
+            </div>
+            <div class="auth-error hidden" id="fp-error" role="alert"></div>
+            <div class="auth-ok hidden" id="fp-done" role="status"></div>
+            <button class="pill-btn" id="fp-submit" type="submit">
+              <span class="pill-badge">
+                <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
+              </span>
+              <span class="pill-text">Send the link</span>
+            </button>
+          </form>
+
+          <form id="reset-form" class="hidden" autocomplete="on">
+            <div class="uline">
+              <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><use href="#i-lock" /></svg>
+              <input id="rp-pass" type="password" placeholder="New password" autocomplete="new-password" required />
+            </div>
+            <div class="uline">
+              <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><use href="#i-lock" /></svg>
+              <input id="rp-pass2" type="password" placeholder="New password again" autocomplete="new-password" required />
+            </div>
+            <p class="hint" id="rp-hint">At least 12 characters. Length matters more than symbols.</p>
+            <div class="auth-error hidden" id="rp-error" role="alert"></div>
+            <button class="pill-btn" id="rp-submit" type="submit">
+              <span class="pill-badge">
+                <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
+              </span>
+              <span class="pill-text">Set the new password</span>
             </button>
           </form>
 

@@ -200,6 +200,17 @@ export class MediaPlane {
     // negotiated at all.
     this.sub.addTransceiver('audio', { direction: 'recvonly' });
     this.sub.addTransceiver('video', { direction: 'recvonly' });
+
+    // An offer the server made before these connections existed. The server
+    // subscribes a newcomer to everyone already publishing the moment they
+    // join; that offer can land while start() still awaits the relay
+    // credentials, and was then dropped -- the newcomer never received
+    // anybody's camera (a slow link, joinrace.e2e.mjs). Applied now, in order.
+    if (this._earlySubOffer) {
+      const body = this._earlySubOffer;
+      this._earlySubOffer = null;
+      this.handleSDP({ dir: Dir.Subscriber, isOffer: true, body }).catch(() => {});
+    }
   }
 
   /**
@@ -568,7 +579,13 @@ export class MediaPlane {
 
     // Subscriber connection: the server offers, we answer. Always.
     if (!isOffer) return;
-    if (!this.sub || this.sub.signalingState === 'closed') return;
+    if (!this.sub) {
+      // Before start(): kept, and applied when the connection exists. The
+      // server has one offer outstanding at a time, so the latest is the one.
+      this._earlySubOffer = body;
+      return;
+    }
+    if (this.sub.signalingState === 'closed') return;
     await this.sub.setRemoteDescription({ type: 'offer', sdp: body });
     this._flushIce(Dir.Subscriber);
     const answer = await this.sub.createAnswer();
@@ -589,14 +606,15 @@ export class MediaPlane {
   // Bounded: a server does not send more than a handful.
   async handleICE({ dir, candidate }) {
     const pc = dir === Dir.Publisher ? this.pub : this.sub;
-    if (!pc) return;
     let c;
     try {
       c = JSON.parse(candidate);
     } catch {
       return;
     }
-    if (!pc.remoteDescription) {
+    // No connection yet (start() still running) or no remote description:
+    // held, bounded, and added once the description is set (_flushIce).
+    if (!pc || !pc.remoteDescription) {
       const q = (this._earlyIce ??= new Map());
       const list = q.get(dir) ?? [];
       if (list.length < EARLY_ICE_MAX) list.push(c);

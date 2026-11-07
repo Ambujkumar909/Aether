@@ -40,6 +40,7 @@ type Handler struct {
 
 	loginLimit  *httpx.Limiter
 	signupLimit *httpx.Limiter
+	resetLimit  *httpx.Limiter
 	apiLimit    *httpx.Limiter
 
 	// AllowSignup gates self-registration. Whether strangers may create
@@ -65,6 +66,9 @@ func NewHandler(svc *Service, log *slog.Logger, secure, trustProxy bool) *Handle
 		// abuse, so it gets a much tighter budget: three an hour, bursting
 		// to three.
 		signupLimit: httpx.NewLimiter(3.0/3600.0, 3),
+		// Reset emails: five an hour per source. Each account is also sent
+		// at most one a minute (ResetEvery), whoever asks.
+		resetLimit: httpx.NewLimiter(5.0/3600.0, 5),
 		// 20 a second sustained, 60 in a burst. A page opening fires a
 		// handful at once, which the burst absorbs; a script cannot sustain
 		// more than twenty without being told to wait.
@@ -80,6 +84,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/identity/signup",
 		httpx.RateLimit(h.signupLimit, h.limitKey, http.HandlerFunc(h.signup)))
 	mux.HandleFunc("GET /api/identity/config", h.config)
+	mux.Handle("POST /api/identity/password/forgot",
+		httpx.RateLimit(h.resetLimit, h.limitKey, http.HandlerFunc(h.forgotPassword)))
+	mux.Handle("POST /api/identity/password/reset",
+		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.resetPassword)))
 	mux.HandleFunc("POST /api/identity/logout", h.logout)
 	mux.Handle("GET /api/identity/me", h.RequireAuth(http.HandlerFunc(h.me)))
 
@@ -171,12 +179,21 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{
 		"allowSignup":       h.AllowSignup,
 		"minPasswordLength": MinPasswordLength,
+		"passwordReset":     h.svc.SendReset != nil,
 	}
 	// The relay's URLs and a fresh credential, when a relay is running. This
 	// is why the client fetches config on join rather than hard-coding ICE
 	// servers: the credential is short-lived and minted here.
+	//
+	// Only for a signed-in session. This page is public (the sign-in screen
+	// reads allowSignup from it), and it once handed a relay credential to
+	// anyone who asked -- with a relay that forwarded anywhere, which made the
+	// server an open relay into its own network. Joining a meeting needs a
+	// session anyway, so nobody who may use the relay is turned away.
 	if h.ICEServers != nil {
-		body["iceServers"] = h.ICEServers()
+		if _, _, err := h.svc.Authorize(r.Context(), h.sessionToken(r)); err == nil {
+			body["iceServers"] = h.ICEServers()
+		}
 	}
 	httpx.JSON(w, http.StatusOK, body)
 }

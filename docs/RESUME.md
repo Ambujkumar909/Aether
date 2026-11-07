@@ -156,12 +156,24 @@ feature, but everything seen or heard is Aether's own.
   ORDER BY given a total tiebreak (a notes-order bug found by it); stale docs
   fixed; the root `aether-desktop.exe` rebuilt with `-trimpath` (ARCHITECTURE
   §6bx).
-- **Phase 1, production foundation:** Linux test run (WSL Ubuntu), Dockerfile
-  and compose, production defaults and a config file, ACME certificates,
-  backups with a restore drill, metrics, CI, email as a pluggable sender,
-  password reset, two-factor login (then SSO), abuse controls for public
-  sign-up, capacity test, Windows app resources/installer/updates, LICENSE and
-  notices.
+- **Phase 1, production foundation.** Done (ARCHITECTURE §6by): the Linux
+  race run (in the image's test stage), Dockerfile and compose (distroless,
+  read-only, no capabilities), env configuration, ACME (Pebble end to end),
+  backups with a restore drill, the open-relay fix, post-quantum TLS, three
+  slow-link client bugs (`joinrace`), Prometheus metrics and alert rules, CI,
+  email (any SMTP), password reset, the login-CSRF fix (415 for non-JSON
+  bodies), third-party notices (`tools/notices.sh`, CI-checked), Windows exe
+  icon and version resources (`tools/winres.sh`). Remaining: two-step sign-in
+  (TOTP and recovery codes; `totp.go` and `internal/platform/seal` are written
+  and tested, not wired), then SSO/OIDC; abuse controls for public sign-up;
+  capacity test; Windows installer and updates; the project's own LICENSE
+  (the owner's choice).
+  Open findings to fix (ARCHITECTURE 6by): the video harness fails about half
+  its runs (a sender's bandwidth estimate that starts starved; predates this
+  batch, measured), and Chrome rarely wedges a newcomer's subscriber under
+  DevTools emulation (joinrace retries that signature once). Email
+  verification on sign-up comes first in the remaining work: open sign-up lets
+  a stranger claim an org-domain address.
 - **Phase 2, what an organization needs to switch:** calendar day/week/month,
   recurring meetings, RSVP, scheduling assistant; web push and a service
   worker; Aether's own sound set; meeting recap; keyboard shortcuts; out of
@@ -186,6 +198,12 @@ feature, but everything seen or heard is Aether's own.
     cd engine && go build -o <scratch>/aether-test.exe ./cmd/aether
     <scratch>/aether-test.exe -addr :9443 -tls -db <scratch>/e2e.db -web ../web -media-port 8811
     <scratch>/aether-test.exe -addr 127.0.0.1:8444 -db <scratch>/measure.db -web ../web -media-port 8802 -relay=false
+
+    # the whole browser battery, natively or against the hardened container
+    # (both start Mailpit, a real SMTP server, and turn email on)
+    & tools/e2e/.stress/browser-run.ps1 -Fresh -Names console,layout,reset -Out tools/e2e/.stress/browser.txt
+    & tools/e2e/.stress/docker-run.ps1 -Fresh -PublicIP <host ip> -Names console,layout -Out tools/e2e/.stress/docker-browser.txt
+    bash tools/e2e/acme.e2e.sh          # automatic certificates against Pebble
 
     # browser e2e and layout (web is served from disk: no rebuild for JS/CSS)
     node tools/e2e/spotlight.e2e.mjs https://localhost:9443   # also roles, breakout, endnotice, coorg, call, controls, share, mute, audio, video, live, livestatus, messaging

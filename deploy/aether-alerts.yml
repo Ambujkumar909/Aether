@@ -1,0 +1,49 @@
+# Prometheus alert rules for Aether (deploy/README.md, Monitoring).
+groups:
+  - name: aether
+    rules:
+      - alert: AetherDown
+        expr: up{job="aether"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "Aether is not answering its metrics endpoint"
+
+      - alert: AetherDatabaseDown
+        expr: aether_db_up == 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "Aether's database stopped answering"
+
+      # 13 h: two missed 6-hourly snapshots. Also fires when none has
+      # succeeded 13 h after start (the timestamp is then 0).
+      - alert: AetherBackupStale
+        expr: time() - aether_backup_last_success_timestamp_seconds > 13 * 3600 and aether_uptime_seconds > 13 * 3600
+        labels: { severity: page }
+        annotations:
+          summary: "No good Aether backup for 13 hours"
+
+      - alert: AetherBackupFailing
+        expr: increase(aether_backup_failures_total[12h]) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "An Aether backup failed (see the server log)"
+
+      - alert: AetherServerErrors
+        expr: |
+          sum(rate(aether_http_responses_total{code=~"5.."}[5m]))
+            / sum(rate(aether_http_responses_total[5m])) > 0.02
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "More than 2% of Aether's responses are server errors"
+
+      # The sign-in and sign-up limiters answer 429. Sustained, that is
+      # somebody guessing passwords or creating accounts in bulk.
+      - alert: AetherRateLimited
+        expr: sum(rate(aether_http_responses_total{code="429"}[5m])) > 1
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Aether is rate-limiting more than one request a second"

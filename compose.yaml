@@ -1,0 +1,52 @@
+# Aether on one Ubuntu server.
+#
+#   cp deploy/env.example deploy/aether.env   # then fill it in
+#   docker compose up -d --build
+#   docker compose logs -f aether              # the first admin password is printed once
+#
+# Ports: 443 and 80 (web, certificates), 8801 TCP+UDP (all meeting media),
+# 3478 TCP+UDP (the TURN relay), 49160-49359 UDP (relay allocations). Open the
+# same ports in the server's firewall (deploy/README.md).
+name: aether
+
+services:
+  aether:
+    build:
+      context: .
+      target: runtime
+      args:
+        VERSION: ${AETHER_VERSION:-dev}
+    image: aether:${AETHER_VERSION:-dev}
+    env_file: deploy/aether.env
+    ports:
+      - "443:8443/tcp"
+      - "80:8080/tcp"
+      - "8801:8801/tcp"
+      - "8801:8801/udp"
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49359:49160-49359/udp"
+      # Prometheus metrics, to this host only (deploy/README.md, Monitoring).
+      - "127.0.0.1:9464:9464/tcp"
+    volumes:
+      - aether-data:/data
+    restart: unless-stopped
+    # Nothing in the image needs to write anywhere but /data, run as root,
+    # gain privileges or hold a Linux capability: all of it is removed.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 4096
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+volumes:
+  aether-data:

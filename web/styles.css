@@ -787,6 +787,16 @@ select.input {
   margin-bottom: 14px;
 }
 
+.auth-ok {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-radius: var(--r-md);
+  padding: 10px 13px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
 .auth-foot {
   margin-top: 24px;
   font-size: 12.5px;

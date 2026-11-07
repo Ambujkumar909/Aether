@@ -1,3 +1,5 @@
+//go:build windows
+
 // Aether for Windows.
 //
 // Why this is written in Go rather than as a Tauri or Electron shell.

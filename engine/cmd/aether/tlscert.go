@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -215,6 +216,11 @@ func certHosts(path string) ([]string, error) {
 }
 
 func writePEM(path, blockType string, der []byte, mode os.FileMode) error {
+	// The directory may not exist yet: a container keeps the certificate on
+	// its data volume (/data/tls), which starts empty.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)

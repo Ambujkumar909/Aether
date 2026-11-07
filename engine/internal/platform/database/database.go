@@ -760,6 +760,16 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS messaging_activity_feed ON messaging_activity(user_id, created_at DESC, id DESC);
 		CREATE INDEX IF NOT EXISTS messaging_activity_message ON messaging_activity(message_id) WHERE message_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS messaging_activity_team ON messaging_activity(team_id) WHERE team_id IS NOT NULL`},
+	// Password reset links (identity/reset.go): the token's hash only, one
+	// outstanding per account (a new request replaces it), gone with the
+	// account. Looked up by hash; replaced and throttled by account.
+	{"0068_identity_password_resets", `
+		CREATE TABLE IF NOT EXISTS identity_password_resets (
+			token_hash TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL UNIQUE REFERENCES identity_users(id) ON DELETE CASCADE,
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL
+		)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

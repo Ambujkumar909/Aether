@@ -20,8 +20,13 @@ import "crypto/tls"
 func hardenedTLS() *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		// X25519 first: fast, constant-time, no parameter validation to get
-		// wrong. P-256 for the rare client without it.
-		CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256},
+		// The hybrid post-quantum exchange first (ML-KEM-768 with X25519,
+		// what Chrome, Edge and Firefox offer): traffic recorded today stays
+		// sealed against a future quantum computer. Naming curves at all
+		// removes the ones not named, and this list once read X25519 and
+		// P-256 alone, which turned the post-quantum exchange off for every
+		// browser. Then X25519 (constant-time, nothing to validate) and P-256
+		// for the rare client without it.
+		CurvePreferences: []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256},
 	}
 }
