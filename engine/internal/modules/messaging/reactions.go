@@ -61,7 +61,7 @@ func (r *SQLRepository) ReactionsFor(ctx context.Context, userID string, ids []s
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT message_id, emoji, user_id FROM messaging_reactions
 		  WHERE message_id IN (`+holes+`)
-		  ORDER BY created_at ASC`, args...)
+		  ORDER BY created_at ASC, rowid ASC`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reactions: %w", err)
 	}
@@ -191,7 +191,7 @@ func (r *SQLRepository) SavedMessages(ctx context.Context, userID string, limit 
 		`SELECT `+prefixed(msgCols, "m")+` FROM messaging_saved s
 		   JOIN messaging_messages m ON m.id = s.message_id
 		  WHERE s.user_id=? AND m.deleted = 0
-		  ORDER BY s.created_at DESC LIMIT ?`, userID, limit)
+		  ORDER BY s.created_at DESC, s.rowid DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("saved messages: %w", err)
 	}

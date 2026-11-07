@@ -2293,9 +2293,9 @@ a lie.
 | | state |
 |---|---|
 | Live captions | **built** (§6q): the browser's own recogniser, text on the wire |
-| Recording | opcode reserved, no encoder or storage |
-| Remote control / take control | **capture path built and measured** (§4a); input injection, consent/audit session and agent binary not started |
-| Breakout rooms | opcode reserved, no handler |
+| Recording | **built** (§6bj): made on the recorder's computer (WebM); transcription and captions per speaker, with consent |
+| Remote control / take control | **built** (§4a, §4c): capture, input injection and the consent lifecycle, in the Windows app |
+| Breakout rooms | **built** (§6bc) |
 | Reactions | **built** (§6q) |
 | External calendar sync | not started |
 | Password reset | placeholder — directs to an administrator |
@@ -3460,7 +3460,7 @@ voice over what remains in your pauses):
 Every engine pairing is within 0.8 dB of the others: the app and a
 browser process a voice identically. Honest limit: a crowd as loud as you
 is RNNoise's ceiling -- it separates speech from noise, not one talker from
-another. GTCRN (same package, trained on harder noise) was benched and is
+another. GTCRN (same package, trained on harder noise) was benched (and its files removed from web/vendor on 2026-11-07; they are in git history) and is
 worse (turns your voice down 7 dB, 16 kHz only). Firefox and Safari are
 not installed here and are untested.
 
@@ -5328,3 +5328,92 @@ endnotice, coorg, teams and activity. Four harnesses had leant on state left
 by another one (chat history that existed, a calendar that was empty, a
 presence class that was already there before the push); each now makes or
 waits for its own.
+
+### 6bx. Production readiness, part 0: what the shipped artifacts showed
+
+A reverse-engineering pass over what actually ships (REA on the release
+binaries and the web client; govulncheck on the module) before building the
+production path. Each finding below is fixed or scheduled, with its test.
+
+**Large conversations count unread when read.** §6br measured every message
+writing every member's unread counter in the send's transaction, on SQLite's
+one writer. A conversation above `LargeConversation` (500 members) now keeps
+no per-member counter: `UnreadCounts` and `UnreadCount` take its count from
+the `(conversation_id, created_at)` index at read time, stopped at
+`UnreadCap` (100) rows, which is exact for display because the client shows
+"99+" above 99. Small conversations keep the maintained counter. A
+conversation shrinking back to the threshold has its counters recounted once
+from the messages; growing past it simply stops maintaining them.
+
+| `BenchmarkSendInto…` (300 sends, this machine) | before | after |
+|---|---|---|
+| 200 members | 0.71–0.73 ms | 0.73–0.78 ms (unchanged path) |
+| 5,000 members | 8.3–10.5 ms | 2.4–3.4 ms |
+
+What is left at 5,000 is the un-hide statement (it walks every member to find
+anyone who hid the chat, ~0.7 ms) and the fan-out's read of 5,000 member ids
+(~1 ms, outside the write). The partial index that would serve the un-hide
+was measured and refused in §6br. The scale fixture's list read is
+unchanged: unread counts for 200 threads p50 4.0 ms. Tests:
+`TestUnreadCountedAtReadTimeEqualsTheTruthUnderARandomSchedule` runs the
+400-step random schedule with every conversation large and checks the list
+count, the single-conversation count and the truth after every step;
+`TestShrinkingBelowTheThresholdRecountsTheCounters` and
+`TestALargeConversationsCountStopsAtTheCap`. Each failed in a scratch
+worktree with its fault planted (the list reading only counters: "list 0,
+truth 1"; no recount on shrinking: "reads 0, want 5"). `UnreadTruth` is the
+uncapped definition every counter is held to.
+
+**A bundled library tried to report to Google.** MediaPipe's vision bundle
+(background effects) carries a usage logger that POSTs to
+`odml.pa.googleapis.com` every 60 s. The CSP (`connect-src 'self'`) already
+refused it, so nothing left; it now never tries (`vendor/mediapipe/PATCHED.md`,
+three exact replacements). `web/src/vendor.test.mjs` fails if any vendored
+script names a telemetry host, schedules the logger or sends to an absolute
+https URL (all three failed against the original bundle). Every browser
+harness now records any request leaving the server's host and any CSP
+refusal (`meet.lib.mjs` `offOrigin`); the effects and visual harnesses fail
+on one.
+
+**Dead code in the public web root.** `web/vendor/gtcrn-bench` (a denoiser
+benchmarked and rejected, §6ax) was served to anyone; removed.
+
+**A timing test that failed on a busy machine.** The 100-person audio fan-out
+test asserted wall time for ticker-paced frames, so under the whole suite with
+`-race` the ticker fell behind (3.4 s of wall for 1.5 s of relay work) and
+failed a relay that was keeping up. It now asserts the relay's own work, and
+still fails when a 10 ms delay is planted in `announce` (3.16 s of work for
+2 s of audio).
+
+**The shipped Windows app.** The `aether-desktop.exe` handed out was built
+without `-trimpath`, so it carries this machine's source paths (including the
+user name); it also has no Authenticode signature, no icon or version
+resource, and predates the app's last change. Release builds use `-trimpath
+-ldflags "-s -w"` and carry no local paths; signing, resources, an installer
+and updates are production work (Phase 1).
+
+**Vulnerable dependencies.** govulncheck found 19 standard-library advisories
+reachable from this code on go1.26.3, and advisories in `golang.org/x/crypto`
+0.55 and `golang.org/x/net` 0.57 that the code does not reach. `go.mod` now
+pins `toolchain go1.26.10` (every build, here or in a container, uses it) with
+x/crypto 0.58 and x/net 0.62; that moved the module to `go 1.26`, which also
+drops the old compatibility default that had post-quantum TLS key exchange off
+(`tlssecpmlkem=0` was in the shipped app's build settings). govulncheck: 0
+reachable. One advisory remains in x/crypto, unreached by this code and fixed
+only in an untagged commit; it is taken with the next tagged release.
+
+**Every list has a total order.** The full suite under `-race` once returned a
+meeting's agenda item third: notes were ordered by `created_at, id`, and the
+id is random, so items written in the same millisecond came back in id order,
+not the order they were written. `TestNoteItemsWrittenInOneMillisecondKeepTheirOrder`
+writes three items in one millisecond with ids that sort backwards and failed
+on every run (`[aa mm zz]`, want `zz,mm,aa`); the tie is now settled by
+`rowid`. A sweep of every `ORDER BY` in the server found 29 more with no
+tiebreak at all -- the chat list, the directory, Q&A questions and replies,
+attendance, the user list paged by OFFSET (where a tie can repeat or skip a
+row across pages), and the "latest" lookups. Each now ends in `rowid` (or the
+primary key where a table has no rowid, or the id for alphabetical lists),
+the CLAUDE.md rule that every ordering has a total tiebreak.
+
+**Corrections to §7.** It still listed recording, breakout rooms and remote
+control as not built; all three were built (§6bj, §6bc, §4c).

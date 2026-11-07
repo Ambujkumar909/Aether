@@ -15,9 +15,48 @@ import (
 // messaging_messages.
 type SQLRepository struct {
 	db *database.DB
+	// large is the member count above which a conversation keeps no unread
+	// counter per member (see LargeConversation). A field so a test can move
+	// it; nothing else does.
+	large int
 }
 
-func NewSQLRepository(db *database.DB) *SQLRepository { return &SQLRepository{db: db} }
+func NewSQLRepository(db *database.DB) *SQLRepository {
+	return &SQLRepository{db: db, large: LargeConversation}
+}
+
+// LargeConversation is the size above which unread is counted when it is
+// read, not kept per member as it is written. A kept counter costs a write on
+// every member's row per message, in the send's transaction, on SQLite's one
+// writer: 0.7 ms a message at 200 members, 8-10 ms at 5,000 (ARCHITECTURE
+// 6br, 6bx). A count at read time is a walk of the (conversation_id,
+// created_at) index from the reader's cursor, stopped at UnreadCap rows, once
+// per large conversation the reader is in.
+const LargeConversation = 500
+
+// UnreadCap is where a count stops. The client shows "99+" for anything over
+// 99, so 100 shows exactly what any larger number would, and a badge never
+// costs more than 100 index steps however far behind somebody is.
+const UnreadCap = 100
+
+// unreadCapped is unreadTruth that stops counting at UnreadCap rows.
+var unreadCapped = `SELECT COUNT(*) FROM (` +
+	strings.Replace(unreadTruth, "SELECT COUNT(*)", "SELECT 1", 1) +
+	fmt.Sprintf(` LIMIT %d)`, UnreadCap)
+
+// isLarge says whether a conversation is past r.large, inside the caller's
+// transaction, so the answer is the one the write sees.
+func (r *SQLRepository) isLarge(ctx context.Context, tx *sql.Tx, convID string) (bool, error) {
+	var n int
+	err := tx.QueryRowContext(ctx, `SELECT member_count FROM messaging_conversations WHERE id=?`, convID).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("member count: %w", err)
+	}
+	return n > r.large, nil
+}
 
 const convCols = `id, kind, title, created_by, created_at, last_message_at, topic, visibility, member_count, avatar_blob, pinned_message_id, meeting_room, team_id`
 
@@ -129,7 +168,7 @@ func (r *SQLRepository) ListConversations(ctx context.Context, userID string) ([
 		SELECT `+prefixed(convCols, "c")+`, m.role, m.favourite, m.muted, m.mentions FROM messaging_conversations c
 		JOIN messaging_members m ON m.conversation_id = c.id
 		WHERE m.user_id = ? AND m.hidden = 0
-		ORDER BY c.last_message_at DESC LIMIT 200`, userID)
+		ORDER BY c.last_message_at DESC, c.rowid DESC LIMIT 200`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -282,13 +321,20 @@ func (r *SQLRepository) AddMessageWithAttachments(ctx context.Context, m *Messag
 	// The unread counter: everybody but the sender has one more. Membership
 	// events do not count -- nobody needs a badge to learn somebody joined.
 	if !m.System {
+		large, err := r.isLarge(ctx, tx, m.ConversationID)
+		if err != nil {
+			return err
+		}
 		// The same predicate as unreadTruth: a member whose cursor already
-		// sits at this millisecond has, by the cursor, read it.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE messaging_members SET unread = unread + 1
-			  WHERE conversation_id=? AND user_id != ? AND last_read < ?`,
-			m.ConversationID, m.SenderID, m.CreatedAt.UnixMilli()); err != nil {
-			return fmt.Errorf("bump unread: %w", err)
+		// sits at this millisecond has, by the cursor, read it. A large
+		// conversation keeps no counter: its unread is counted when read.
+		if !large {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE messaging_members SET unread = unread + 1
+				  WHERE conversation_id=? AND user_id != ? AND last_read < ?`,
+				m.ConversationID, m.SenderID, m.CreatedAt.UnixMilli()); err != nil {
+				return fmt.Errorf("bump unread: %w", err)
+			}
 		}
 		// A chat somebody hid comes back when somebody writes in it -- that is
 		// what "hide" means, as opposed to "leave".
@@ -448,16 +494,27 @@ func (r *SQLRepository) SoftDeleteMessage(ctx context.Context, id string) error 
 	}
 	defer func() { _ = tx.Rollback() }()
 	// Whoever had not read it yet has one less to read: same predicate as the
-	// count, so the counter and the truth move together.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE messaging_members SET unread = unread - 1
-		 WHERE unread > 0
-		   AND conversation_id = (SELECT conversation_id FROM messaging_messages WHERE id=? AND deleted=0)
-		   AND user_id != (SELECT sender_id FROM messaging_messages WHERE id=?)
-		   AND last_read < (SELECT created_at FROM messaging_messages WHERE id=?)
-		   AND NOT EXISTS (SELECT 1 FROM messaging_hidden h WHERE h.user_id = messaging_members.user_id AND h.message_id = ?)`,
-		id, id, id, id); err != nil {
+	// count, so the counter and the truth move together. A large
+	// conversation has no counter to move.
+	var convID string
+	if err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM messaging_messages WHERE id=?`, id).Scan(&convID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	large, err := r.isLarge(ctx, tx, convID)
+	if err != nil {
+		return err
+	}
+	if !large {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE messaging_members SET unread = unread - 1
+			 WHERE unread > 0
+			   AND conversation_id = (SELECT conversation_id FROM messaging_messages WHERE id=? AND deleted=0)
+			   AND user_id != (SELECT sender_id FROM messaging_messages WHERE id=?)
+			   AND last_read < (SELECT created_at FROM messaging_messages WHERE id=?)
+			   AND NOT EXISTS (SELECT 1 FROM messaging_hidden h WHERE h.user_id = messaging_members.user_id AND h.message_id = ?)`,
+			id, id, id, id); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE messaging_members SET mentions = mentions - 1
@@ -727,7 +784,7 @@ func (r *SQLRepository) DueScheduled(ctx context.Context, now time.Time, limit i
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id FROM messaging_messages
 		  WHERE deliver_at IS NOT NULL AND deliver_at <= ? AND deliver_at > created_at AND deleted = 0
-		  ORDER BY deliver_at LIMIT ?`, now.UnixMilli(), limit)
+		  ORDER BY deliver_at, rowid LIMIT ?`, now.UnixMilli(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("due scheduled: %w", err)
 	}
@@ -772,11 +829,17 @@ func (r *SQLRepository) Deliver(ctx context.Context, id string, at time.Time) (*
 		at.UnixMilli(), m.ConversationID, at.UnixMilli()); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE messaging_members SET unread = unread + 1
-		  WHERE conversation_id=? AND user_id != ? AND last_read < ?`,
-		m.ConversationID, m.SenderID, at.UnixMilli()); err != nil {
+	large, err := r.isLarge(ctx, tx, m.ConversationID)
+	if err != nil {
 		return nil, err
+	}
+	if !large {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE messaging_members SET unread = unread + 1
+			  WHERE conversation_id=? AND user_id != ? AND last_read < ?`,
+			m.ConversationID, m.SenderID, at.UnixMilli()); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE messaging_members SET hidden = 0 WHERE conversation_id=? AND user_id != ? AND hidden = 1`,
@@ -1026,7 +1089,7 @@ func (r *SQLRepository) Unblock(ctx context.Context, userID, blockedID string) e
 
 func (r *SQLRepository) BlockedIDs(ctx context.Context, userID string) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT blocked_id FROM messaging_blocks WHERE user_id = ? ORDER BY created_at DESC`, userID)
+		`SELECT blocked_id FROM messaging_blocks WHERE user_id = ? ORDER BY created_at DESC, blocked_id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1287,6 +1350,19 @@ func (r *SQLRepository) RemoveMember(ctx context.Context, convID, userID string)
 			`UPDATE messaging_conversations SET member_count = max(member_count - 1, 0) WHERE id=?`, convID); err != nil {
 			return err
 		}
+		// Back to the threshold from above: the counters were not kept while
+		// the conversation was large, so they are counted once, now, and kept
+		// from here on. Once per crossing, never per message.
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT member_count FROM messaging_conversations WHERE id=?`, convID).Scan(&n); err != nil {
+			return err
+		}
+		if n == r.large {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE messaging_members SET unread = (`+unreadTruth+`) WHERE conversation_id=?`, convID); err != nil {
+				return fmt.Errorf("recount unread: %w", err)
+			}
+		}
 	}
 	return tx.Commit()
 }
@@ -1392,7 +1468,7 @@ func (r *SQLRepository) PublicChannels(ctx context.Context, viewerID, q string, 
 		       EXISTS (SELECT 1 FROM messaging_members m WHERE m.conversation_id = c.id AND m.user_id = ?) AS joined
 		  FROM messaging_conversations c
 		 WHERE c.kind = ? AND c.visibility = ? AND c.team_id = ''`+where+`
-		 ORDER BY c.title_key LIMIT ?`, args...)
+		 ORDER BY c.title_key, c.id LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse channels: %w", err)
 	}
@@ -1497,9 +1573,15 @@ func (r *SQLRepository) UnreadCounts(ctx context.Context, userID string) (map[st
 	// measured 2.5x slower on the scale fixture.
 	// The maintained counter (see the 0037 migration): one indexed read per
 	// membership, no counting. UnreadCount below is the truth it is held to.
+	// A large conversation's count is taken here instead, capped (see
+	// LargeConversation and UnreadCap).
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT conversation_id, unread FROM messaging_members
-		 WHERE user_id = ? AND unread > 0`, userID)
+		SELECT messaging_members.conversation_id,
+		       CASE WHEN c.member_count > ? THEN (`+unreadCapped+`) ELSE messaging_members.unread END
+		  FROM messaging_members
+		  JOIN messaging_conversations c ON c.id = messaging_members.conversation_id
+		 WHERE messaging_members.user_id = ? AND (messaging_members.unread > 0 OR c.member_count > ?)`,
+		r.large, userID, r.large)
 	if err != nil {
 		return nil, fmt.Errorf("unread counts: %w", err)
 	}
@@ -1511,7 +1593,9 @@ func (r *SQLRepository) UnreadCounts(ctx context.Context, userID string) (map[st
 		if err := rows.Scan(&id, &n); err != nil {
 			return nil, err
 		}
-		out[id] = n
+		if n > 0 {
+			out[id] = n
+		}
 	}
 	return out, rows.Err()
 }
@@ -1583,9 +1667,14 @@ func (r *SQLRepository) LastMessages(ctx context.Context, convIDs []string) (map
 
 func (r *SQLRepository) UnreadCount(ctx context.Context, convID, userID string) (int, error) {
 	var n int
+	// The list's rule for one conversation, so a row and its open
+	// conversation always show the same number.
 	err := r.db.QueryRowContext(ctx, `
-		SELECT (`+unreadTruth+`) FROM messaging_members
-		 WHERE conversation_id = ? AND user_id = ?`, convID, userID).Scan(&n)
+		SELECT CASE WHEN c.member_count > ? THEN (`+unreadCapped+`) ELSE messaging_members.unread END
+		  FROM messaging_members
+		  JOIN messaging_conversations c ON c.id = messaging_members.conversation_id
+		 WHERE messaging_members.conversation_id = ? AND messaging_members.user_id = ?`,
+		r.large, convID, userID).Scan(&n)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -1593,6 +1682,19 @@ func (r *SQLRepository) UnreadCount(ctx context.Context, convID, userID string) 
 		return 0, fmt.Errorf("unread count: %w", err)
 	}
 	return n, nil
+}
+
+// UnreadTruth is unreadTruth itself, uncapped and from the messages, never
+// from a counter: what every counter and every count is held to in tests.
+func (r *SQLRepository) UnreadTruth(ctx context.Context, convID, userID string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT (`+unreadTruth+`) FROM messaging_members
+		 WHERE conversation_id = ? AND user_id = ?`, convID, userID).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return n, err
 }
 
 // ---------------------------------------------------------------------------
@@ -1684,7 +1786,7 @@ func (r *SQLRepository) AnswerCall(ctx context.Context, room string, accepted bo
 	}
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE messaging_calls SET answered = ?
-		WHERE id = (SELECT id FROM messaging_calls WHERE room = ? ORDER BY started_at DESC LIMIT 1)`,
+		WHERE id = (SELECT id FROM messaging_calls WHERE room = ? ORDER BY started_at DESC, rowid DESC LIMIT 1)`,
 		v, room)
 	if err != nil {
 		return fmt.Errorf("answer call: %w", err)
@@ -1708,7 +1810,7 @@ func (r *SQLRepository) CallsBetween(ctx context.Context, a, b string, limit int
 		                 WHERE att.room = c.room AND att.left_at IS NOT NULL), 0)
 		FROM messaging_calls c
 		WHERE (c.caller_id = ? AND c.callee_id = ?) OR (c.caller_id = ? AND c.callee_id = ?)
-		ORDER BY c.started_at DESC
+		ORDER BY c.started_at DESC, c.rowid DESC
 		LIMIT ?`, a, b, b, a, limit)
 	if err != nil {
 		return nil, fmt.Errorf("calls between: %w", err)

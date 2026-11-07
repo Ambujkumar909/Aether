@@ -151,7 +151,7 @@ func (r *SQLRepository) List(ctx context.Context, f Filter) ([]*Meeting, error) 
 	if len(cond) > 0 {
 		q += " WHERE " + strings.Join(cond, " AND ")
 	}
-	q += " ORDER BY starts_at ASC LIMIT ?"
+	q += " ORDER BY starts_at ASC, id ASC LIMIT ?"
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 200
@@ -246,7 +246,7 @@ func (r *SQLRepository) Conflicts(ctx context.Context, email string, from, to ti
 		  AND ends_at > ?
 		  AND (organizer_email = ? OR id IN
 		       (SELECT meeting_id FROM scheduling_invitees WHERE email = ?))
-		ORDER BY starts_at ASC LIMIT 20`,
+		ORDER BY starts_at ASC, id ASC LIMIT 20`,
 		string(StatusScheduled), exclude,
 		to.UnixMilli(), from.UnixMilli(),
 		strings.ToLower(email), strings.ToLower(email))
@@ -369,7 +369,7 @@ func (r *SQLRepository) CompleteRoom(ctx context.Context, room string, at time.T
 func (r *SQLRepository) ByRoom(ctx context.Context, room string) (*Meeting, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+cols+` FROM scheduling_meetings
-		 WHERE room = ? ORDER BY starts_at DESC LIMIT 1`, room)
+		 WHERE room = ? ORDER BY starts_at DESC, id DESC LIMIT 1`, room)
 	m, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

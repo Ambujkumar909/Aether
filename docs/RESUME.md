@@ -139,13 +139,38 @@ ARCHITECTURE §6bs; media phase in `tools/e2e/stress.mjs` (`--no-media`, `--medi
 
 ARCHITECTURE §6bt; the "controls" phase of `tools/e2e/stress.mjs` (Q&A, notes, captions, host controls, breakouts, polls, files, search). `pushMessage` serialises a message's pushes with a dirty re-run (`pushorder_test.go`: monotonic tallies under 100 concurrent votes, and a gated interleaving); media payloads are shared across receivers (`wire.EncodeBatchParts`, `Conn.EmitMedia(payload)`), and a grown write buffer is released.
 
-## Next, in order
+## The plan to production (agreed 2026-11-07)
 
-1. Media at 50 over WebRTC: simulated RTP senders against the SFU allocator (browsers cannot run fifty encoders). Fix `load.e2e.mjs`'s server CPU/memory sampling (reads 0).
-2. Large conversations: count unread from the message index at read time instead of an O(members) counter write per message (§6br: 25.8 ms a send at 5,000 members, single SQLite writer).
-3. Calendar views with a scheduling assistant.
-4. Measure the camera quantizer on real footage (§6bl); spatial audio for Together mode.
-5. Remaining chat items (see TEAMS_PARITY "Not built" rows).
+Target: a Docker container on an Ubuntu server, for the user's organization and
+the public (open sign-up, like Google Meet). The user buys the domain after the
+build is done. Outside paid services (email provider, phone carrier, signing
+certificate) are skipped for now; build so they plug in later. Every feature is
+tested rigorously before the next starts; security is hardened throughout and
+penetration-tested once the build is complete. Standing hard rule: every Teams
+feature, but everything seen or heard is Aether's own.
+
+- **Phase 0, close-out** (2026-11-07): read-time unread for large
+  conversations; MediaPipe telemetry neutralised (`vendor.test.mjs`, harness
+  `offOrigin`); GTCRN removed; Go 1.26.10, x/crypto 0.58, x/net 0.62
+  (govulncheck: 0 reachable); the fan-out timing test made load-proof; every
+  ORDER BY given a total tiebreak (a notes-order bug found by it); stale docs
+  fixed; the root `aether-desktop.exe` rebuilt with `-trimpath` (ARCHITECTURE
+  §6bx).
+- **Phase 1, production foundation:** Linux test run (WSL Ubuntu), Dockerfile
+  and compose, production defaults and a config file, ACME certificates,
+  backups with a restore drill, metrics, CI, email as a pluggable sender,
+  password reset, two-factor login (then SSO), abuse controls for public
+  sign-up, capacity test, Windows app resources/installer/updates, LICENSE and
+  notices.
+- **Phase 2, what an organization needs to switch:** calendar day/week/month,
+  recurring meetings, RSVP, scheduling assistant; web push and a service
+  worker; Aether's own sound set; meeting recap; keyboard shortcuts; out of
+  office and notification settings; server-side speaker selection; data
+  export and deletion.
+- **Security phase:** threat model, hardening review, penetration test of the
+  finished build.
+- **Phase 3, full parity** (after launch) and **Phase 4, 50,000 users**
+  (Postgres or replicated SQLite, multi-node media, distributed load tests).
 
 ## When the whole project is finished
 

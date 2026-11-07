@@ -19,7 +19,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { accounts, fail, failed, launch, ok, signedIn, sleep, enter } from './meet.lib.mjs';
+import { accounts, fail, failed, launch, ok, signedIn, sleep, enter, offOrigin } from './meet.lib.mjs';
 
 const SHOTS = join(dirname(fileURLToPath(import.meta.url)), '.shots');
 mkdirSync(SHOTS, { recursive: true });
@@ -292,6 +292,7 @@ try {
   await sleep(800);
 
   await A.setViewport({ width: 1280, height: 800 });
+  ok(offOrigin(log).length === 0, `nothing left the server's host in any state (${offOrigin(log).slice(0, 3).join(' | ') || 'none'})`);
   ok(log.filter((l) => l.includes('PAGE ERROR')).length === 0, `no page errors (${log.filter((l) => l.includes('PAGE ERROR')).slice(0, 3).join(' | ') || 'none'})`);
 } catch (e) {
   fail(e);

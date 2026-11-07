@@ -176,7 +176,7 @@ func (r *SQLRepository) Questions(ctx context.Context, room, qid, viewer string)
 		q += ` AND q.id = ?`
 		args = append(args, qid)
 	}
-	q += ` ORDER BY q.created_at`
+	q += ` ORDER BY q.created_at, q.rowid`
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("questions: %w", err)
@@ -206,7 +206,7 @@ func (r *SQLRepository) Questions(ctx context.Context, room, qid, viewer string)
 		rq += ` AND q.id = ?`
 		rargs = append(rargs, qid)
 	}
-	rq += ` ORDER BY r.created_at`
+	rq += ` ORDER BY r.created_at, r.rowid`
 	rrows, err := r.db.QueryContext(ctx, rq, rargs...)
 	if err != nil {
 		return nil, fmt.Errorf("replies: %w", err)

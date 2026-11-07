@@ -88,7 +88,7 @@ func (r *SQLRepository) LiveForSubject(ctx context.Context, subjectID string, no
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+sessionCols+` FROM control_sessions
 		 WHERE subject_id = ? AND state = ? AND expires_at > ?
-		 ORDER BY requested_at DESC LIMIT 1`,
+		 ORDER BY requested_at DESC, rowid DESC LIMIT 1`,
 		subjectID, string(StateGranted), now.UnixMilli())
 	s, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -101,7 +101,7 @@ func (r *SQLRepository) PendingFor(ctx context.Context, subjectID string) ([]*Se
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+sessionCols+` FROM control_sessions
 		 WHERE subject_id = ? AND state = ?
-		 ORDER BY requested_at DESC`,
+		 ORDER BY requested_at DESC, rowid DESC`,
 		subjectID, string(StateRequested))
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ func (r *SQLRepository) ForMeeting(ctx context.Context, meetingID string, limit 
 	}
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+sessionCols+` FROM control_sessions
-		 WHERE meeting_id = ? ORDER BY requested_at DESC LIMIT ?`,
+		 WHERE meeting_id = ? ORDER BY requested_at DESC, rowid DESC LIMIT ?`,
 		meetingID, limit)
 	if err != nil {
 		return nil, err

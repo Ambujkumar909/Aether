@@ -15,9 +15,20 @@ import (
 // truth the counter is held to. Seeded, so a failure replays.
 
 func TestUnreadCounterEqualsTheTruthUnderARandomSchedule(t *testing.T) {
+	unreadSchedule(t, LargeConversation)
+}
+
+// The same schedule with both conversations past the threshold, so every
+// count is taken at read time: the read-time path is held to the same truth.
+func TestUnreadCountedAtReadTimeEqualsTheTruthUnderARandomSchedule(t *testing.T) {
+	unreadSchedule(t, 1)
+}
+
+func unreadSchedule(t *testing.T, large int) {
 	s := serviceForTest(t)
 	ctx := context.Background()
 	repo := s.repo.(*SQLRepository)
+	repo.large = large
 
 	me := Actor{ID: "u-me", Email: "me@example.com", Name: "Me"}
 	you := Actor{ID: "u-you", Email: "other@example.com", Name: "Other"}
@@ -36,7 +47,7 @@ func TestUnreadCounterEqualsTheTruthUnderARandomSchedule(t *testing.T) {
 		t.Helper()
 		for _, c := range convs {
 			for _, p := range people {
-				truth, err := repo.UnreadCount(ctx, c, p.ID)
+				truth, err := repo.UnreadTruth(ctx, c, p.ID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -45,7 +56,15 @@ func TestUnreadCounterEqualsTheTruthUnderARandomSchedule(t *testing.T) {
 					t.Fatal(err)
 				}
 				if got[c] != truth {
-					t.Fatalf("step %d (%s): %s in %s: counter %d, truth %d", step, what, p.Name, c, got[c], truth)
+					t.Fatalf("step %d (%s): %s in %s: list %d, truth %d", step, what, p.Name, c, got[c], truth)
+				}
+				// The row and the open conversation say the same number.
+				one, err := repo.UnreadCount(ctx, c, p.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if one != truth {
+					t.Fatalf("step %d (%s): %s in %s: one conversation %d, truth %d", step, what, p.Name, c, one, truth)
 				}
 				mTruth, err := repo.MentionCount(ctx, c, p.ID)
 				if err != nil {
@@ -148,5 +167,74 @@ func TestListUsesTheCounter(t *testing.T) {
 	list, _ = s.List(ctx, me)
 	if list[0].Unread != 1 {
 		t.Fatalf("unread after a send and a retracted send: %d, want 1", list[0].Unread)
+	}
+}
+
+// A conversation that was large keeps no counters; when it shrinks back to
+// the threshold its counters are counted from the messages, so the list is
+// exact from then on. Without the recount the counter read 0 here.
+func TestShrinkingBelowTheThresholdRecountsTheCounters(t *testing.T) {
+	s := serviceForTest(t)
+	ctx := context.Background()
+	repo := s.repo.(*SQLRepository)
+	repo.large = 2
+	me := Actor{ID: "u-me", Email: "me@example.com", Name: "Me"}
+	you := Actor{ID: "u-you", Email: "other@example.com", Name: "Other"}
+	c, err := s.CreateGroup(ctx, me, "Big", []string{you.Email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddMembers(ctx, c.ID, []Member{{UserID: "u-third", Email: "third@example.com", Name: "Third", Role: RoleMember}}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond) // past the join cursors
+	for i := range 5 {
+		if _, err := s.Send(ctx, you, c.ID, fmt.Sprint("while large ", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := repo.UnreadCounts(ctx, me.ID); got[c.ID] != 5 {
+		t.Fatalf("large: counted at read time %d, want 5", got[c.ID])
+	}
+	if err := repo.RemoveMember(ctx, c.ID, "u-third"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := repo.UnreadCounts(ctx, me.ID); got[c.ID] != 5 {
+		t.Fatalf("back to the threshold: the kept counter reads %d, want 5", got[c.ID])
+	}
+	if _, err := s.Send(ctx, you, c.ID, "small again"); err != nil {
+		t.Fatal(err)
+	}
+	truth, _ := repo.UnreadTruth(ctx, c.ID, me.ID)
+	if got, _ := repo.UnreadCounts(ctx, me.ID); got[c.ID] != 6 || truth != 6 {
+		t.Fatalf("kept again: counter %d, truth %d, want 6", got[c.ID], truth)
+	}
+}
+
+// A large conversation's count stops at UnreadCap: the badge shows "99+" for
+// anything over 99, so 100 is exactly what a bigger number would show, and
+// the read never walks further than that.
+func TestALargeConversationsCountStopsAtTheCap(t *testing.T) {
+	s := serviceForTest(t)
+	ctx := context.Background()
+	repo := s.repo.(*SQLRepository)
+	repo.large = 1
+	me := Actor{ID: "u-me", Email: "me@example.com", Name: "Me"}
+	you := Actor{ID: "u-you", Email: "other@example.com", Name: "Other"}
+	c, err := s.CreateGroup(ctx, me, "Big", []string{you.Email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	for i := range UnreadCap + 50 {
+		if _, err := s.Send(ctx, you, c.ID, fmt.Sprint("m", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := repo.UnreadCounts(ctx, me.ID)
+	one, _ := repo.UnreadCount(ctx, c.ID, me.ID)
+	truth, _ := repo.UnreadTruth(ctx, c.ID, me.ID)
+	if got[c.ID] != UnreadCap || one != UnreadCap || truth != UnreadCap+50 {
+		t.Fatalf("list %d, one %d, truth %d; want %d, %d, %d", got[c.ID], one, truth, UnreadCap, UnreadCap, UnreadCap+50)
 	}
 }

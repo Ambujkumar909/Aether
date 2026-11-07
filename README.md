@@ -16,8 +16,8 @@ one Go server and one browser client, measured down to the byte.
 
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![No build step](https://img.shields.io/badge/client-no_build_step-0b7a62?style=flat-square)
-![Go tests](https://img.shields.io/badge/Go_tests-495-0b7a62?style=flat-square)
-![Browser harnesses](https://img.shields.io/badge/browser_harnesses-23-0b7a62?style=flat-square)
+![Go tests](https://img.shields.io/badge/Go_tests-529-0b7a62?style=flat-square)
+![Browser harnesses](https://img.shields.io/badge/browser_harnesses-27-0b7a62?style=flat-square)
 ![Measured](https://img.shields.io/badge/every_claim-measured_with_tshark-2b3440?style=flat-square)
 
 [**Features**](#everything-a-team-needs-to-meet) · [**Why it is different**](#the-difference-is-measured) · [**Privacy**](#private-by-construction) · [**Architecture**](#architecture) · [**Run it**](#run-it-in-two-minutes) · [**Engineering**](#how-it-is-built)
@@ -172,9 +172,10 @@ own account and address, through chat, reactions, @mentions, teams, the activity
 meeting (hands, reactions, whiteboard, Together mode, floods) at once. At 200 people a burst of
 1,000 messages became 199,000 deliveries: none lost, none repeated, none out of order. When
 everyone leaves, the server is back to 17 goroutines, with no rooms or media routes left. The run
-found five defects, fixed them, and also found a limit not yet fixed: a 5,000-member channel
-costs 26 ms a message to write. All of it is in
-[ARCHITECTURE §6br](docs/ARCHITECTURE.md). The same run with audio, every camera and a screen
+found five defects and fixed them. It also found a 5,000-member channel paying for a write to
+every member's unread counter on each message; large conversations now count unread when it is
+read, and a message into one costs 2.4–3.4 ms instead of 8–10 ms on this machine. All of it is in
+[ARCHITECTURE §6br and §6bx](docs/ARCHITECTURE.md). The same run with audio, every camera and a screen
 share from 50 people delivered 108,961 of 108,961 frames at p99 under 20 ms, and sends each person
 only the cameras on their screen: 1.0 Mbit/s each instead of 4.1
 ([§6bs](docs/ARCHITECTURE.md)).

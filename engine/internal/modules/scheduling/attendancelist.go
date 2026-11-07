@@ -44,7 +44,7 @@ func (r *SQLRepository) RoomAttendance(ctx context.Context, room string, since t
 		SELECT user_id, name, joined_at, left_at
 		FROM scheduling_attendance
 		WHERE room = ? AND joined_at >= ?
-		ORDER BY joined_at
+		ORDER BY joined_at, rowid
 		LIMIT ?`, room, since.UnixMilli(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("room attendance: %w", err)

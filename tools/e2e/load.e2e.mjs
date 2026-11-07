@@ -85,7 +85,12 @@ const sample = (page) => page.evaluate(async () => {
 });
 function procStats() {
   try {
-    const srv = execSync(`powershell -NoProfile -Command "Get-Process aether-server | Select-Object -First 1 | ForEach-Object { '{0} {1}' -f $_.TotalProcessorTime.TotalSeconds, $_.WorkingSet64 }"`, { encoding: 'utf8' }).trim().split(/\s+/).map(Number);
+    // The server is whatever listens on BASE's port: its binary may be named
+    // anything (it was looked up as "aether-server", which never ran, so the
+    // server's CPU and memory read 0).
+    const port = new URL(BASE).port || '443';
+    const srv = execSync(`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; Get-Process -Id $c.OwningProcess | ForEach-Object { '{0} {1}' -f $_.TotalProcessorTime.TotalSeconds, $_.WorkingSet64 }"`, { encoding: 'utf8' }).trim().split(/\s+/).map(Number);
+    if (!(srv[1] > 0)) throw new Error('no server process on port ' + port);
     const pid = browser.process().pid;
     const ch = execSync(`powershell -NoProfile -Command "$ids = @(${pid}); $all = Get-CimInstance Win32_Process -Filter \\"name='chrome.exe'\\"; $more = $true; while ($more) { $more = $false; foreach ($p in $all) { if ($ids -contains $p.ParentProcessId -and -not ($ids -contains $p.ProcessId)) { $ids += $p.ProcessId; $more = $true } } }; $t = 0; $m = 0; foreach ($p in $all) { if ($ids -contains $p.ProcessId) { $t += ($p.KernelModeTime + $p.UserModeTime) / 1e7; $m += $p.WorkingSetSize } }; '{0} {1}' -f $t, $m"`, { encoding: 'utf8' }).trim().split(/\s+/).map(Number);
     const sys = Number(execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"`, { encoding: 'utf8' }).trim());

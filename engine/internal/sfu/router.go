@@ -569,8 +569,8 @@ func (r *Router) Stats() RouterStats {
 			target, waiting := d.Pending()
 			st.Feeds = append(st.Feeds, DownstreamStat{
 				Subscriber: p.ID, Track: tid, Publisher: pub, Slot: d.Slot(),
-				Layer:   d.Current().String(),
-				Target:  target.String(), Waiting: waiting, KeyWaits: kw,
+				Layer:  d.Current().String(),
+				Target: target.String(), Waiting: waiting, KeyWaits: kw,
 				Packets: pkts, Switches: sw,
 				ViewportW: w, ViewportH: h, Visible: visible,
 			})

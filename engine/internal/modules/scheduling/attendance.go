@@ -71,11 +71,11 @@ func (r *SQLRepository) History(ctx context.Context, userID string, limit int) (
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT a.id, a.user_id, a.room, a.name, a.joined_at, a.left_at,
 		       COALESCE((SELECT m.title FROM scheduling_meetings m WHERE m.room = a.room
-		                 ORDER BY m.starts_at DESC LIMIT 1), '') AS title
+		                 ORDER BY m.starts_at DESC, m.id DESC LIMIT 1), '') AS title
 		FROM scheduling_attendance a
 		WHERE a.user_id = ?
 		  AND a.room NOT IN (SELECT room FROM messaging_calls)
-		ORDER BY a.joined_at DESC
+		ORDER BY a.joined_at DESC, a.rowid DESC
 		LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("history: %w", err)

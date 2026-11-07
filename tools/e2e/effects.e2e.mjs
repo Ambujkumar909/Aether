@@ -23,7 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BASE, accounts, launch, signedIn, enter, until, ok, fail, failed, sleep } from './meet.lib.mjs';
+import { BASE, accounts, launch, signedIn, enter, until, ok, fail, failed, sleep, offOrigin } from './meet.lib.mjs';
 
 // A 320x180 solid red PNG, written by hand (no image library here).
 function redPNG() {
@@ -183,6 +183,9 @@ try {
   await A.evaluate(() => document.getElementById('btn-cam').click());
   ok(await until(A, () => /^blur:/.test(document.documentElement.dataset.fx ?? ''), null, 10000), 'camera on again: the blur comes back with it');
   ok(await A.evaluate(() => JSON.parse(localStorage.getItem('aether.effects')).background === 'blur'), 'the choice is kept on this device');
+  // MediaPipe ran for the whole test: nothing it carries reached past the server.
+  const away = offOrigin(log);
+  ok(away.length === 0, `nothing left the server's host while the segmenter ran (${away.slice(0, 3).join(' | ') || 'none'})`);
 } catch (e) {
   fail(e);
 } finally {

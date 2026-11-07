@@ -134,7 +134,7 @@ func (r *SQLRepository) ListUsers(ctx context.Context, f UserFilter) ([]*User, e
 	args = append(args, limit, f.Offset)
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+userCols+` FROM identity_users`+clause+
-			` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args...)
+			` ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -172,7 +172,7 @@ func (r *SQLRepository) FoundingAdminEmail(ctx context.Context) (string, error) 
 	err := r.db.QueryRowContext(ctx,
 		`SELECT email FROM identity_users
 		  WHERE role = ? AND status = ?
-		  ORDER BY created_at ASC LIMIT 1`,
+		  ORDER BY created_at ASC, rowid ASC LIMIT 1`,
 		string(RoleAdmin), string(StatusActive)).Scan(&email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -228,7 +228,7 @@ func (r *SQLRepository) SearchDirectory(ctx context.Context, q string, limit int
 		// so a fresh install still shows the two people who are on it.
 		return r.directoryRows(ctx,
 			`SELECT id, display_name, email FROM identity_users
-			 WHERE status = ? ORDER BY created_at DESC LIMIT ?`,
+			 WHERE status = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
 			string(StatusActive), limit)
 	}
 	return r.directorySearch(ctx, "", nil, q, limit)
@@ -332,7 +332,7 @@ func (r *SQLRepository) RevokeUserSessions(ctx context.Context, userID string, a
 func (r *SQLRepository) ListSessions(ctx context.Context, userID string) ([]*Session, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+sessCols+` FROM identity_sessions WHERE user_id=?
-		 ORDER BY created_at DESC LIMIT 100`, userID)
+		 ORDER BY created_at DESC, rowid DESC LIMIT 100`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}

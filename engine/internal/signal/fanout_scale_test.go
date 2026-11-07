@@ -121,7 +121,7 @@ func TestHundredPersonRoomRelaysEveryAudioFrameToEveryoneElse(t *testing.T) {
 		}(i, clients[i])
 	}
 
-	relay := func(speakers int, seconds int) (time.Duration, int64) {
+	relay := func(speakers int, seconds int) (time.Duration, time.Duration, int64) {
 		for _, cl := range clients {
 			cl.got.Store(0)
 			cl.bytes.Store(0)
@@ -192,19 +192,24 @@ func TestHundredPersonRoomRelaysEveryAudioFrameToEveryoneElse(t *testing.T) {
 		if d := disorder.Load(); d != 0 {
 			t.Fatalf("%d speakers: %d frames arrived out of order", speakers, d)
 		}
-		return elapsed, total
+		return elapsed, busy, total
 	}
 
 	// Three talking, ninety-seven muted (and silent on the wire).
-	el3, bytes3 := relay(3, 2)
+	el3, busy3, bytes3 := relay(3, 2)
 	perRecipient3 := bytes3 / N / 2 // per second
 	t.Logf("3 speakers x 2 s: relayed %d frames to 99 recipients each in %v (%.1f%% of real time); %d B/s per recipient",
 		3*fps*2, el3.Round(time.Millisecond), 100*el3.Seconds()/2, perRecipient3)
-	if el3 > 2500*time.Millisecond {
-		t.Fatalf("three speakers could not be relayed in real time: %v for 2 s of audio", el3)
+	// Real time means the relay's own work for 2 s of audio fits in 2 s (with
+	// headroom). Wall time is the wrong measure: the frames are paced by a
+	// ticker, and on a loaded machine (the whole suite under -race) the ticker
+	// itself falls behind while the relay sits idle -- that once read 3.4 s of
+	// wall for 1.5 s of work and failed a relay that was keeping up.
+	if busy3 > 2500*time.Millisecond {
+		t.Fatalf("three speakers could not be relayed in real time: %v of relay work for 2 s of audio (%v wall)", busy3, el3)
 	}
 	// Everyone unmuted and sending: the ceiling.
-	el100, bytes100 := relay(N, 1)
+	el100, _, bytes100 := relay(N, 1)
 	perRecipient100 := bytes100 / N
 	t.Logf("100 speakers x 1 s: relayed %d frames (%d deliveries) in %v (%.0f%% of real time); %d B/s per recipient",
 		N*fps, N*fps*(N-1), el100.Round(time.Millisecond), 100*el100.Seconds(), perRecipient100)

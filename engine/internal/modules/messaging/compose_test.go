@@ -118,7 +118,7 @@ func TestAScheduledMessageIsTheAuthorsAloneUntilItsTime(t *testing.T) {
 	if list[0].Unread != 1 || list[0].Mentions != 1 || list[0].Preview != "good morning" {
 		t.Fatalf("after delivery: unread %d mentions %d preview %q", list[0].Unread, list[0].Mentions, list[0].Preview)
 	}
-	truth, _ := repo.UnreadCount(ctx, conv, you.ID)
+	truth, _ := repo.UnreadTruth(ctx, conv, you.ID)
 	if truth != 1 {
 		t.Fatalf("truth after delivery: %d", truth)
 	}

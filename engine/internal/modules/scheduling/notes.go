@@ -80,7 +80,9 @@ func (r *SQLRepository) NoteItems(ctx context.Context, room, id string) ([]*Note
 		q += ` AND id = ?`
 		args = append(args, id)
 	}
-	q += ` ORDER BY created_at, id`
+	// rowid, not the random id, settles a tie: items written in the same
+	// millisecond keep the order they were written in.
+	q += ` ORDER BY created_at, rowid`
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

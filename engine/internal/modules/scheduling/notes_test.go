@@ -145,3 +145,30 @@ func TestNotesBoundsAndIndex(t *testing.T) {
 		t.Fatalf("not index-backed: %s", plan)
 	}
 }
+
+// Items written in the same millisecond keep the order they were written in.
+// The tiebreak was the item's random id, so two notes added quickly could
+// swap places (the full suite under -race once returned the agenda item
+// third). The ids here sort opposite to the order they are written.
+func TestNoteItemsWrittenInOneMillisecondKeepTheirOrder(t *testing.T) {
+	s, _ := notesFixture(t)
+	ctx := context.Background()
+	repo := s.repo.(*SQLRepository)
+	at := time.UnixMilli(1_700_000_000_000)
+	for _, id := range []string{"zz", "mm", "aa"} {
+		if err := repo.AddNoteItem(ctx, "r", &NoteItem{ID: id, Section: "notes", Body: id, UpdatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := repo.NoteItems(ctx, "r", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		got = append(got, it.ID)
+	}
+	if strings.Join(got, ",") != "zz,mm,aa" {
+		t.Fatalf("same-millisecond items came back %v, want zz,mm,aa (the order written)", got)
+	}
+}

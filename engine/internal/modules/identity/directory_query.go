@@ -69,7 +69,7 @@ func (r *SQLRepository) directorySearch(ctx context.Context, scope string, scope
 	if q == "" {
 		return r.directoryRows(ctx,
 			`SELECT u.id, u.display_name, u.email FROM identity_users AS u
-			  WHERE u.status = ?`+scope+` ORDER BY u.name_key LIMIT ?`,
+			  WHERE u.status = ?`+scope+` ORDER BY u.name_key, u.id LIMIT ?`,
 			append(append([]any{active}, scopeArgs...), limit)...)
 	}
 
@@ -93,7 +93,7 @@ func (r *SQLRepository) directorySearch(ctx context.Context, scope string, scope
 	rows, err := r.directoryRows(ctx,
 		`SELECT u.id, u.display_name, u.email FROM identity_users AS u INDEXED BY identity_users_name_key
 		  WHERE u.name_key >= ? AND u.name_key < ? AND u.status = ?`+scope+`
-		  ORDER BY u.name_key LIMIT ?`,
+		  ORDER BY u.name_key, u.id LIMIT ?`,
 		append(append([]any{lo, hi, active}, scopeArgs...), limit)...)
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func (r *SQLRepository) directorySearch(ctx context.Context, scope string, scope
 	rows, err = r.directoryRows(ctx,
 		`SELECT u.id, u.display_name, u.email FROM identity_users AS u INDEXED BY identity_users_email_key
 		  WHERE u.email_key >= ? AND u.email_key < ? AND u.status = ?`+scope+`
-		  ORDER BY u.email_key LIMIT ?`,
+		  ORDER BY u.email_key, u.id LIMIT ?`,
 		append(append([]any{lo, hi, active}, scopeArgs...), limit)...)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (r *SQLRepository) directorySearch(ctx context.Context, scope string, scope
 		   FROM (SELECT id FROM identity_users_fts WHERE identity_users_fts MATCH ? LIMIT ?) AS f
 		   CROSS JOIN identity_users AS u ON u.id = f.id
 		  WHERE u.status = ?`+scope+`
-		  ORDER BY u.name_key LIMIT ?`,
+		  ORDER BY u.name_key, u.id LIMIT ?`,
 		append(append([]any{ftsPhrase(q), ftsCandidateCap, active}, scopeArgs...), limit)...)
 	if err != nil {
 		return nil, err

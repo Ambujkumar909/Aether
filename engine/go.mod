@@ -1,6 +1,8 @@
 module github.com/aether-rtc/aether
 
-go 1.25.0
+go 1.26.0
+
+toolchain go1.26.10
 
 require (
 	github.com/coder/websocket v1.8.15
@@ -14,8 +16,8 @@ require (
 	github.com/pion/sdp/v3 v3.0.19
 	github.com/pion/turn/v5 v5.0.12
 	github.com/pion/webrtc/v4 v4.2.18
-	golang.org/x/crypto v0.55.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.57.0
 )
 
@@ -34,7 +36,7 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

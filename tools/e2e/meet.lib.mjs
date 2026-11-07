@@ -73,11 +73,24 @@ const INSTRUMENT = `(() => {
   window.__liveTracks = () => window.__streams.flatMap((s) => s.getTracks()).filter((t) => t.readyState === 'live').length;
 })();`;
 
+// What signedIn recorded leaving the server's host (requests and CSP refusals).
+export const offOrigin = (log) => log.filter((l) => / (OFF-ORIGIN|CSP): /.test(l));
+
 export async function signedIn(browser, acct, label, log, viewport = { width: 1280, height: 800 }) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.evaluateOnNewDocument(INSTRUMENT);
   page.on('pageerror', (e) => log.push(`${label} PAGE ERROR: ${e}`));
+  // Nothing leaves the server's own host: a request elsewhere, or one the CSP
+  // had to refuse, is recorded for offOrigin() to fail on.
+  const host = new URL(BASE).host;
+  page.on('request', (r) => {
+    const u = r.url();
+    if (/^(https?|wss?):/.test(u) && new URL(u).host !== host) log.push(`${label} OFF-ORIGIN: ${u}`);
+  });
+  page.on('console', (m) => {
+    if (/Content Security Policy|Refused to (connect|load|execute)/.test(m.text())) log.push(`${label} CSP: ${m.text().slice(0, 200)}`);
+  });
   await page.setViewport(viewport);
   await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 30000 });
   const home = () => getComputedStyle(document.getElementById('auth')).display === 'none' && getComputedStyle(document.getElementById('home')).display !== 'none';

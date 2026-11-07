@@ -106,7 +106,7 @@ func TestMarkUnreadAgreesWithTheTruth(t *testing.T) {
 		t.Fatal(err)
 	}
 	mine, _ := s.List(ctx, me)
-	truth, _ := repo.UnreadCount(ctx, conv, me.ID)
+	truth, _ := repo.UnreadTruth(ctx, conv, me.ID)
 	if mine[0].Unread != 1 || truth != 1 {
 		t.Fatalf("mark unread: counter %d, truth %d, want 1 and 1", mine[0].Unread, truth)
 	}

@@ -570,9 +570,17 @@ const SCREENS = [
     go: async (page) => {
       await page.evaluate(() => document.getElementById('btn-leave')?.click());
       await sleep(1500);
-      // A "leave?" confirmation, if one is drawn, is answered.
-      await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /^(leave|end|yes)/i.test(b.textContent.trim()))?.click());
-      await sleep(1200);
+      // A "leave?" confirmation, if one is drawn, is answered. Leaving can
+      // reload the page under this call, so a lost context is not a failure.
+      await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /^(leave|end|yes)/i.test(b.textContent.trim()))?.click()).catch(() => {});
+      // Done when the home screen is drawn, not after a guessed delay: the
+      // audit once ran mid-reload ("Execution context was destroyed").
+      // waitForFunction re-runs in the new document after a navigation.
+      await page.waitForFunction(() => {
+        const h = document.getElementById('home');
+        return h && getComputedStyle(h).display !== 'none' && document.readyState === 'complete';
+      }, { timeout: 20000 });
+      await sleep(300);
     },
   },
 ];
