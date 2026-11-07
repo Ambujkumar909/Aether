@@ -1,5 +1,64 @@
 # Resume here — Teams parity work
 
+## Start here (handoff, 2026-11-07 evening)
+
+Production plan, Phase 1 (deploy to an Ubuntu server in Docker, for the
+user's org and the public). Commits today: `ea217c2` (Phase 1 part 1), CI
+fixes `636de82` `c49a908` `a11109f` `608b7a0` (CI green from `608b7a0`), and
+`48cedfa` (email-verified sign-up; its CI run 42378530342 was in progress at
+handoff -- check it first:
+`curl -s https://api.github.com/repos/Ambujkumar909/Aether/actions/runs/42378530342 | grep conclusion`;
+failing steps report as annotations at `.../check-runs/<id>/annotations`,
+because job logs need a login).
+
+**Next, in order:**
+1. **Two-step sign-in (TOTP).** Done and tested, not wired:
+   `identity/totp.go` (RFC 6238 vectors, replay-proof, +-1 step),
+   `internal/platform/seal` (AES-256-GCM at rest bound to the account id,
+   HMAC "pepper" for recovery codes, key file created atomically). Written
+   but NOT yet tested: `internal/platform/qr/qr.go` (QR encoder, byte mode,
+   level M, versions 1-10, SVG; compiles). Test it against a real decoder:
+   render PNGs from Go and decode them with zbar in a throwaway container
+   (`docker run --rm -v <dir>:/w alpine sh -c "apk add --no-cache zbar >/dev/null && zbarimg -q --raw /w/x.png"`),
+   for texts that land in each version 1-10 -- no decoder exists on the
+   machine (no cv2/pyzbar; Chrome has no BarcodeDetector on Windows). Then:
+   migration (secret sealed, last_step, recovery codes as seal.MAC), a login
+   second step (ticket, 5 tries, counts toward lockout), setup/enable/disable
+   endpoints (password re-check, revoke other sessions on enable), admin
+   reset for a lost phone, audit events, the console Account card and an
+   auth-card "code" view; e2e with a TOTP computed in the harness.
+2. SSO/OIDC; remaining abuse controls for public sign-up (a global sign-up
+   rate, disposable-domain policy); capacity test; Windows installer and
+   auto-update (exe resources done: `tools/winres.sh`, needs MinGW windres);
+   the project's own LICENSE (the owner's choice -- ask).
+3. **Open findings (ARCHITECTURE 6by):** the video harness fails about half
+   its runs (a sender's bandwidth estimate that starts starved; predates
+   today, A/B measured -- next: compare the SFU's transport-cc feedback in a
+   passing and a failing run); Chrome rarely wedges a newcomer's subscriber
+   under DevTools emulation (joinrace retries that exact signature once).
+4. Then Phase 2, the security phase (threat model, pentest), Phase 4.
+
+**Running things (changed today):** both runners start Mailpit (a real
+SMTP server, `tools/e2e/mailpit.sh`) and turn email on; the native runner
+also creates an admin (recording needs it). With mail on, every harness
+signs up through the emailed link (`signUpVerified`/`mailedToken` in
+`meet.lib.mjs`). Signup is still 3/hour per process: run `console` first so
+A/B exist (`video` and `call` only read saved accounts).
+
+    & tools/e2e/.stress/browser-run.ps1 -Fresh -Names console,signup,reset,messaging -Out tools/e2e/.stress/b.txt
+    & tools/e2e/.stress/docker-run.ps1 -Fresh -PublicIP <host ip> -Names console,reset -Out tools/e2e/.stress/d.txt
+    docker build --target test .        # Linux vet + race suite
+    bash tools/e2e/acme.e2e.sh          # Pebble; also runs in WSL Ubuntu (wsl -e bash -c ...)
+
+**Gotchas found today:** Python `open(p,'w')` on Windows writes CRLF -- a CRLF
+shell script cannot be parsed by bash on Linux (exit 2); `.gitattributes`
+pins LF for *.sh, *.yml and the Dockerfile, but edit with binary-mode Python
+or the Edit tool. In Bash-tool heredocs, a backslash-n inside Python strings often
+arrives as a real newline and breaks Go/JS string literals: check with
+`gofmt`/`node --check` after every scripted edit. Installing outside tools
+(`go install`) is blocked by the permission classifier; use what is installed.
+
+
 Paused 2 Nov 2026; batch 2 finished the same day. This file is the hand-off: what is done, what is half
 done (with the exact state of every file), what comes next, and how to run
 everything. Read it with `CLAUDE.md` (the build rules) and
