@@ -5,9 +5,10 @@
 Production plan, Phase 1 (deploy to an Ubuntu server in Docker, for the
 user's org and the public). Commits today: `ea217c2` (Phase 1 part 1), CI
 fixes `636de82` `c49a908` `a11109f` `608b7a0` (CI green from `608b7a0`), and
-`48cedfa` (email-verified sign-up; its CI run 42378530342 was in progress at
-handoff -- check it first:
-`curl -s https://api.github.com/repos/Ambujkumar909/Aether/actions/runs/42378530342 | grep conclusion`;
+`48cedfa` (email-verified sign-up) and the handoff commits after it. CI was
+still running at handoff (a newer push cancels the older run) -- check the
+latest run on main first:
+`curl -s "https://api.github.com/repos/Ambujkumar909/Aether/actions/runs?per_page=1" | grep -E '"(head_sha|status|conclusion)"'`;
 failing steps report as annotations at `.../check-runs/<id>/annotations`,
 because job logs need a login).
 
