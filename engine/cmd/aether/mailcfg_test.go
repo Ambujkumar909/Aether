@@ -57,3 +57,16 @@ func TestPort465IsTLSFromTheStartAndAnyOtherPortSTARTTLS(t *testing.T) {
 		}
 	}
 }
+
+func TestTheSignUpEmailsCarryTheLinkOrNothing(t *testing.T) {
+	v := verifyBody("https://meet.example.com", "TOK")
+	if !strings.Contains(v, "\nhttps://meet.example.com/#verify=TOK\n") || !strings.Contains(v, "password you chose") {
+		t.Fatalf("verify:\n%s", v)
+	}
+	// The notice goes to an address an attacker typed: it carries no link
+	// that does anything, only the server's address.
+	n := noticeBody("https://meet.example.com")
+	if strings.Contains(n, "#") || !strings.Contains(n, "https://meet.example.com") {
+		t.Fatalf("notice:\n%s", n)
+	}
+}

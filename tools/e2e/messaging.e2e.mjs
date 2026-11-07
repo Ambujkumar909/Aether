@@ -17,6 +17,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Reader, Writer, Op, newDictPair, splitBatch } from '../../web/src/wire.js';
 import { decodeChatFrame } from './chatframes.mjs';
+import { mailedToken } from './meet.lib.mjs';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // the dev certificate is self-signed
 const BASE = process.argv[2] || 'https://localhost:8443';
@@ -149,11 +150,15 @@ async function signup(label) {
   const suffix = randomBytes(4).toString('hex');
   c.email = `e2e-${label.toLowerCase()}-${suffix}@example.test`;
   c.password = 'e2e-' + randomBytes(9).toString('base64url');
-  const r = await c.post('/api/identity/signup', {
+  let r = await c.post('/api/identity/signup', {
     email: c.email,
     displayName: `E2E ${label}`,
     password: c.password,
   });
+  // With mail on, sign-up is finished by the emailed link (identity/signup.go).
+  if (r.status === 202 && r.json?.verify) {
+    r = await c.post('/api/identity/signup/verify', { token: await mailedToken(c.email, 'verify'), password: c.password });
+  }
   if (r.status !== 201) throw new Error(`signup ${label}: ${r.status} ${JSON.stringify(r.json)}`);
   c.user = r.json.user;
   saved[host] = { ...(saved[host] ?? {}), [label]: { email: c.email, password: c.password } };

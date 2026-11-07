@@ -100,7 +100,12 @@ docker compose start aether
 
 ## Email
 
-Password reset sends a link by email; nothing else needs mail yet. Point
+Mail does two things: password reset, and proving an address at sign-up --
+with mail configured, open sign-up creates an account only once the emailed
+link is opened with the password chosen (a stranger cannot register your
+colleagues' addresses). Without mail, sign-up stays immediate, except that
+addresses in the organisation's own domains must be created by an
+administrator. Point
 `AETHER_SMTP_ADDR` (and user, password, from) at any SMTP server in
 `deploy/aether.env`. The connection is always encrypted (TLS on 465, STARTTLS
 required elsewhere) and the server's certificate is verified; for a mail

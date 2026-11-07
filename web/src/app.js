@@ -27,7 +27,7 @@ import {
 } from './wire.js';
 import { MediaPlane } from './rtc.js';
 import {
-  session, login, logout, resume, signup, serverConfig, forgotPassword, resetPassword,
+  session, login, logout, resume, signup, completeSignup, serverConfig, forgotPassword, resetPassword,
   telemetry, scheduling, ApiError,
 } from './api.js';
 import {
@@ -7618,17 +7618,18 @@ function wireHome() {
 let authView = 'login';
 let authCfg = { allowSignup: false, passwordReset: false };
 let resetToken = '';
-const AUTH_FORMS = { login: 'login-form', signup: 'signup-form', forgot: 'forgot-form', reset: 'reset-form' };
+const AUTH_FORMS = { login: 'login-form', signup: 'signup-form', forgot: 'forgot-form', reset: 'reset-form', verify: 'verify-form' };
 const AUTH_TAGS = {
   login: 'Access your account',
   signup: 'Create your account',
   forgot: 'Reset your password',
   reset: 'Choose a new password',
+  verify: 'Finish creating your account',
 };
 function authMode(view, note = '') {
   authView = view;
   for (const [v, id] of Object.entries(AUTH_FORMS)) $(id).classList.toggle('hidden', v !== view);
-  for (const id of ['li-error', 'su-error', 'fp-error', 'rp-error', 'fp-done']) $(id).classList.add('hidden');
+  for (const id of ['li-error', 'su-error', 'su-done', 'fp-error', 'rp-error', 'fp-done', 'vf-error']) $(id).classList.add('hidden');
   $('li-done').textContent = note;
   $('li-done').classList.toggle('hidden', !note);
   document.querySelector('.auth-tagline').textContent = AUTH_TAGS[view];
@@ -7637,17 +7638,19 @@ function authMode(view, note = '') {
   $('swap-text').textContent = view === 'signup' ? 'Already have an account?' : back ? '' : 'New here?';
   $('swap-btn').textContent = back ? 'Back to sign in' : 'Create an account';
   $('auth-swap').classList.toggle('hidden', !back && !authCfg.allowSignup);
-  $({ login: 'li-email', signup: 'su-name', forgot: 'fp-email', reset: 'rp-pass' }[view])?.focus();
+  $({ login: 'li-email', signup: 'su-name', forgot: 'fp-email', reset: 'rp-pass', verify: 'vf-pass' }[view])?.focus();
 }
 
-// A reset link carries its token in the fragment, which never reaches a
-// server. It is taken once and wiped from the address bar and the history,
-// so it is not left on screen, in a shared screenshot, or under Back.
-function takeResetToken() {
-  const m = /^#reset=([A-Za-z0-9_-]{1,128})$/.exec(location.hash);
-  if (!m) return '';
+// A reset or sign-up link carries its token in the fragment, which never
+// reaches a server. It is taken once and wiped from the address bar and the
+// history, so it is not left on screen, in a shared screenshot, or under Back.
+let verifyToken = '';
+function takeLinkTokens() {
+  const m = /^#(reset|verify)=([A-Za-z0-9_-]{1,128})$/.exec(location.hash);
+  if (!m) return;
   history.replaceState(null, '', location.pathname + location.search);
-  return m[1];
+  if (m[1] === 'reset') resetToken = m[2];
+  else verifyToken = m[2];
 }
 
 function wireAuth() {
@@ -7731,6 +7734,30 @@ function wireAuth() {
     }
   };
 
+  const vfErr = $('vf-error');
+  $('verify-form').onsubmit = async (e) => {
+    e.preventDefault();
+    vfErr.classList.add('hidden');
+    const btn = $('vf-submit');
+    btn.disabled = true;
+    try {
+      await completeSignup(verifyToken, $('vf-pass').value);
+      verifyToken = '';
+      $('vf-pass').value = '';
+      await enterHome();
+    } catch (e2) {
+      vfErr.textContent =
+        e2 instanceof ApiError && e2.status === 429
+          ? 'Too many attempts. Wait a moment and try again.'
+          : e2 instanceof ApiError
+            ? e2.message
+            : 'Something went wrong. Try again.';
+      vfErr.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   const rpErr = $('rp-error');
   $('reset-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -7774,6 +7801,7 @@ function wireAuth() {
     const btn = $('su-submit');
     btn.disabled = true;
     suErr.classList.add('hidden');
+    $('su-done').classList.add('hidden');
     try {
       const u = await signup(
         $('su-email').value.trim(),
@@ -7781,13 +7809,13 @@ function wireAuth() {
         $('su-pass').value
       );
       $('su-pass').value = '';
-      if (!u) {
-        // The address was already registered. The server will not confirm
-        // that, and neither will this: the message points at sign-in without
-        // asserting the account exists.
-        suErr.textContent =
-          'If that address is available the account was created. Try signing in.';
-        suErr.classList.remove('hidden');
+      if (u.pending) {
+        // Email-verified sign-up: the link in the inbox finishes it. Without
+        // verification this means the address was taken -- which the server
+        // will not confirm, and neither does this.
+        $('su-done').textContent =
+          u.status || 'If that address is available the account was created. Try signing in.';
+        $('su-done').classList.remove('hidden');
         return;
       }
       await enterHome();
@@ -7825,11 +7853,14 @@ syncControls();
 
 // A reload should not force a sign-in. The session cookie is still valid, so
 // ask the server who we are before showing a login form nobody needs.
-resetToken = takeResetToken();
+takeLinkTokens();
 resume().then((u) => {
   if (resetToken) {
     show('auth');
     authMode('reset');
+  } else if (verifyToken) {
+    show('auth');
+    authMode('verify');
   } else if (u) enterHome();
   else show('auth');
 });

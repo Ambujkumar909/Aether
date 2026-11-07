@@ -172,8 +172,7 @@ feature, but everything seen or heard is Aether's own.
   its runs (a sender's bandwidth estimate that starts starved; predates this
   batch, measured), and Chrome rarely wedges a newcomer's subscriber under
   DevTools emulation (joinrace retries that signature once). Email
-  verification on sign-up comes first in the remaining work: open sign-up lets
-  a stranger claim an org-domain address.
+  verification on sign-up is done (6by).
 - **Phase 2, what an organization needs to switch:** calendar day/week/month,
   recurring meetings, RSVP, scheduling assistant; web push and a service
   worker; Aether's own sound set; meeting recap; keyboard shortcuts; out of

@@ -193,7 +193,7 @@ func (s *Service) ResetPassword(ctx context.Context, token, next, ip, ua string)
 // ---------------------------------------------------------------------------
 
 func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
-	defer evenOut(time.Now())
+	defer evenOut(time.Now(), resetAnswerAfter)
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -238,9 +238,9 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// evenOut holds a response until resetAnswerAfter has passed since start.
-func evenOut(start time.Time) {
-	if d := resetAnswerAfter - time.Since(start); d > 0 {
+// evenOut holds a response until floor has passed since start.
+func evenOut(start time.Time, floor time.Duration) {
+	if d := floor - time.Since(start); d > 0 {
 		time.Sleep(d)
 	}
 }

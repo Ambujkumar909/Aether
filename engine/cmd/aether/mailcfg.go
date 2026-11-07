@@ -85,6 +85,42 @@ func resetSender(q *mail.Queue, base string) func(email, token string) {
 	}
 }
 
+// verifySender mails the link that finishes a sign-up; noticeSender tells an
+// existing account's owner that somebody tried to sign up with their address.
+func verifySender(q *mail.Queue, base string) func(email, token string) {
+	return func(email, token string) {
+		q.Enqueue(mail.Message{To: email, Subject: "Finish creating your Aether account", Body: verifyBody(base, token)})
+	}
+}
+
+func noticeSender(q *mail.Queue, base string) func(email string) {
+	return func(email string) {
+		q.Enqueue(mail.Message{To: email, Subject: "Someone tried to sign up with your address", Body: noticeBody(base)})
+	}
+}
+
+func verifyBody(base, token string) string {
+	return strings.Join([]string{
+		"Someone, hopefully you, signed up for Aether with this address.",
+		"",
+		"To finish, open this link within 24 hours and enter the password you chose:",
+		"",
+		base + "/#verify=" + token,
+		"",
+		"If it was not you, ignore this email: no account exists until the link is used.",
+	}, "\n")
+}
+
+func noticeBody(base string) string {
+	return strings.Join([]string{
+		"Someone tried to create an Aether account with this address, which already has one.",
+		"Nothing was changed.",
+		"",
+		"If it was you, sign in at " + base + " -- or use \"Forgot your password?\" there.",
+		"If it was not you, you can ignore this email.",
+	}, "\n")
+}
+
 func resetBody(base, email, token string) string {
 	return strings.Join([]string{
 		"Someone asked to reset the password for the Aether account " + email + ".",

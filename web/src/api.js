@@ -121,7 +121,14 @@ export async function signup(email, displayName, password) {
   const res = await api.post('/api/identity/signup', { email, displayName, password });
   // A 202 means the address was already taken, which the server declines to
   // confirm. There is no session in that response.
-  if (!res?.user) return null;
+  if (!res?.user) return { pending: true, verify: !!res?.verify, status: res?.status || '' };
+  return session.adopt(res);
+}
+
+// completeSignup finishes an email-verified sign-up: the link's token and the
+// password chosen at sign-up. It signs the new account in.
+export async function completeSignup(token, password) {
+  const res = await api.post('/api/identity/signup/verify', { token, password });
   return session.adopt(res);
 }
 

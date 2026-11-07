@@ -770,6 +770,19 @@ var migrations = []migration{
 			created_at INTEGER NOT NULL,
 			expires_at INTEGER NOT NULL
 		)`},
+	// Sign-ups waiting for their email link (identity/signup.go): no account
+	// exists until the link is opened with the password chosen here. A few
+	// per address, looked up by the token's hash.
+	{"0069_identity_signups", `
+		CREATE TABLE IF NOT EXISTS identity_signups (
+			token_hash    TEXT PRIMARY KEY,
+			email         TEXT NOT NULL COLLATE NOCASE,
+			display_name  TEXT NOT NULL,
+			password_hash TEXT NOT NULL,
+			created_at    INTEGER NOT NULL,
+			expires_at    INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS identity_signups_email ON identity_signups(email, created_at)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

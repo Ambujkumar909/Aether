@@ -20,6 +20,33 @@ export const fail = (e) => { console.log('FAIL  threw: ' + (e?.stack ?? e)); fai
 
 // Throwaway accounts named "E2E <label>", kept per host in .accounts.json:
 // signups are rate-limited, so a run reuses what an earlier run made.
+// The newest link of a kind ('verify' or 'reset') mailed to an address, read
+// back from the test SMTP server (tools/e2e/mailpit.sh).
+export const MAILPIT = process.env.MAILPIT || 'http://127.0.0.1:8025';
+export async function mailedToken(to, kind = 'verify') {
+  for (let i = 0; i < 60; i++) {
+    const r = await (await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent('to:' + to)}`)).json();
+    for (const m of r.messages ?? []) {
+      const full = await (await fetch(`${MAILPIT}/api/v1/message/${m.ID}`)).json();
+      const t = new RegExp(`#${kind}=([A-Za-z0-9_-]+)`).exec(full.Text || '');
+      if (t) return t[1];
+    }
+    await sleep(250);
+  }
+  throw new Error(`no ${kind} link mailed to ${to}`);
+}
+
+// Sign-up as a person does it: with verification on (the server has mail),
+// the account exists only once the emailed link is used.
+export async function signUpVerified(email, displayName, password) {
+  const r = await fetch(BASE + '/api/identity/signup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, displayName, password }) });
+  if (r.status === 201) return r;
+  const body = await r.json().catch(() => ({}));
+  if (r.status !== 202 || !body.verify) return r;
+  const token = await mailedToken(email, 'verify');
+  return fetch(BASE + '/api/identity/signup/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, password }) });
+}
+
 export async function accounts(labels) {
   const store = join(here, '.accounts.json');
   const all = existsSync(store) ? JSON.parse(readFileSync(store, 'utf8')) : {};
@@ -29,7 +56,7 @@ export async function accounts(labels) {
     if (mine[label]) continue;
     const email = `e2e-${label.toLowerCase()}-${Math.random().toString(36).slice(2, 10)}@example.test`;
     const password = 'e2e-' + Math.random().toString(36).slice(2, 14);
-    const r = await fetch(BASE + '/api/identity/signup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, displayName: `E2E ${label}`, password }) });
+    const r = await signUpVerified(email, `E2E ${label}`, password);
     if (r.status !== 201) throw new Error(`signup ${label}: ${r.status}`);
     mine[label] = { email, password };
     // Kept at once: signup is limited to three an hour, and an account made

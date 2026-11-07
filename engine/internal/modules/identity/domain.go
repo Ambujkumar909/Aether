@@ -244,6 +244,11 @@ type Repository interface {
 	ResetCreatedAt(ctx context.Context, userID string) (time.Time, error)
 	SaveReset(ctx context.Context, tokenHash, userID string, created, expires time.Time) error
 	ConsumeReset(ctx context.Context, tokenHash string, now time.Time) (string, error)
+
+	// Email-verified sign-up (signup.go).
+	SavePendingSignup(ctx context.Context, tokenHash, email, name, passwordHash string, created, expires time.Time) error
+	PendingSignup(ctx context.Context, tokenHash string, now time.Time) (*pendingSignup, error)
+	ClearPendingSignups(ctx context.Context, email string) error
 }
 
 // Reader is the narrow interface other modules depend on, per the module

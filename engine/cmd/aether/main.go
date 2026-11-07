@@ -385,6 +385,9 @@ func main() {
 	default:
 		mailQueue = mail.NewQueue(smtpCfg, log)
 		identityModule.Service.SendReset = resetSender(mailQueue, linkBase)
+		// Sign-up proves the address before an account exists (signup.go).
+		identityModule.Service.SendVerify = verifySender(mailQueue, linkBase)
+		identityModule.Service.SendSignupNotice = noticeSender(mailQueue, linkBase)
 		log.Info("email: on", "server", *smtpAddr, "from", *smtpFrom, "links", linkBase)
 	}
 	// And the other half of that policy: whether a conversation may cross the

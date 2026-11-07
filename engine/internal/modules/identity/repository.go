@@ -362,6 +362,10 @@ func (r *SQLRepository) PurgeExpiredSessions(ctx context.Context, before time.Ti
 		`DELETE FROM identity_password_resets WHERE expires_at < ?`, before.UnixMilli()); err != nil {
 		return 0, fmt.Errorf("purge password resets: %w", err)
 	}
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM identity_signups WHERE expires_at < ?`, before.UnixMilli()); err != nil {
+		return 0, fmt.Errorf("purge pending sign-ups: %w", err)
+	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }

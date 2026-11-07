@@ -83,6 +83,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.login)))
 	mux.Handle("POST /api/identity/signup",
 		httpx.RateLimit(h.signupLimit, h.limitKey, http.HandlerFunc(h.signup)))
+	mux.Handle("POST /api/identity/signup/verify",
+		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.completeSignup)))
 	mux.HandleFunc("GET /api/identity/config", h.config)
 	mux.Handle("POST /api/identity/password/forgot",
 		httpx.RateLimit(h.resetLimit, h.limitKey, http.HandlerFunc(h.forgotPassword)))
@@ -180,6 +182,7 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"allowSignup":       h.AllowSignup,
 		"minPasswordLength": MinPasswordLength,
 		"passwordReset":     h.svc.SendReset != nil,
+		"verifySignup":      h.svc.SendVerify != nil,
 	}
 	// The relay's URLs and a fresh credential, when a relay is running. This
 	// is why the client fetches config on join rather than hard-coding ICE
@@ -215,9 +218,20 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := httpx.ClientIP(r, h.TrustProxy)
 	ua := r.UserAgent()
+	if h.svc.SendVerify != nil {
+		// A new address and a known one answer alike, after the same time.
+		defer evenOut(time.Now(), signupAnswerAfter)
+	}
 
 	u, err := h.svc.SignUp(r.Context(), req.Email, req.DisplayName, req.Password, ip, ua)
 	if err != nil {
+		if errors.Is(err, ErrSignupPending) && h.svc.SendVerify != nil {
+			httpx.JSON(w, http.StatusAccepted, map[string]any{
+				"status": "Check your email: the link there finishes creating your account.",
+				"verify": true,
+			})
+			return
+		}
 		if errors.Is(err, ErrSignupPending) {
 			// The address is taken, and we are not going to say so. The
 			// response is the same shape a success would produce minus the
@@ -626,6 +640,9 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusForbidden, "forbidden", "your role does not permit this")
 	case errors.Is(err, ErrEmailTaken):
 		httpx.Error(w, http.StatusConflict, "email_taken", "that email is already registered")
+	case errors.Is(err, ErrSignupOrgDomain):
+		httpx.Error(w, http.StatusForbidden, "signup_org_domain",
+			"accounts at this address's domain are created by an administrator")
 	case errors.Is(err, ErrSignupClosed):
 		httpx.Error(w, http.StatusForbidden, "signup_closed",
 			"this server does not accept new accounts")

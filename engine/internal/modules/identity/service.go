@@ -91,6 +91,13 @@ type Service struct {
 	// main when outgoing mail is configured; nil turns password reset off.
 	SendReset func(email, token string)
 
+	// SendVerify delivers a sign-up link; set, it makes sign-up email-verified
+	// (signup.go). SendSignupNotice tells an existing account's owner that
+	// somebody tried to sign up with their address.
+	SendVerify       func(email, token string)
+	SendSignupNotice func(email string)
+	notices          noticeThrottle
+
 	// dummyHash makes an unknown-email login cost the same as a known one.
 	// Without it, response time discloses which addresses are registered,
 	// which is how attackers build a target list before ever guessing a
@@ -507,6 +514,23 @@ func (s *Service) SignUp(ctx context.Context, email, name, password, ip, ua stri
 	if err := ValidatePassword(password); err != nil {
 		return nil, err
 	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = norm
+	}
+	if len(name) > 120 {
+		name = name[:120]
+	}
+	if s.SendVerify != nil {
+		return nil, s.verifiedSignup(ctx, norm, name, password, ip, ua)
+	}
+	// Without mail nothing can prove an address, and one in the
+	// organisation's own domains would join its address book on sight.
+	if s.inOrgDomain(ctx, norm) {
+		s.record(ctx, audit.Event{Action: audit.ActionSignUpBlocked, Outcome: audit.OutcomeDenied,
+			Subject: norm, IP: ip, UserAgent: ua, Detail: "organisation domain, and no mail to verify it"})
+		return nil, ErrSignupOrgDomain
+	}
 
 	// An address that is already registered must not be distinguishable from
 	// one that is not. Reporting "that email is taken" to an anonymous caller
@@ -532,14 +556,6 @@ func (s *Service) SignUp(ctx context.Context, email, name, password, ip, ua stri
 		return nil, err
 	}
 	now := time.Now().UTC()
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = norm
-	}
-	if len(name) > 120 {
-		name = name[:120]
-	}
-
 	u := &User{
 		ID: newID(), Email: norm, DisplayName: name,
 		Role: RoleMember, Status: StatusActive,

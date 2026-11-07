@@ -5641,3 +5641,42 @@ this morning's committed server failed 4 of 8, today's 4 of 8; the morning's
 client 2 of 6, today's 3 of 6. Earlier batteries passed it by luck. The next
 step is the publisher's feedback path (transport-wide congestion control from
 the SFU) measured run against run; recorded in docs/RESUME.md.
+
+**CI, green, and what Linux found.** The first run on GitHub failed three
+jobs that passed here. The Pebble test mounted an owner-only `mktemp`
+directory into a container running as uid 65532 (`permission denied`,
+reproduced in WSL Ubuntu); `ci-browser.sh` had been committed with CRLF line
+endings, so bash on the runner could not parse it -- `.gitattributes` now
+pins LF for shell, YAML and the Dockerfile; Ubuntu 24.04 restricts the user
+namespaces Chrome's sandbox needs (allowed, not `--no-sandbox`). Two media
+tests at a time timed out on the runner only, a different pair each run.
+A diagnostic on timeout showed it: both ends "checking", 3 local candidates
+and 0 remote. The Go test client trickled candidates the moment they were
+gathered -- during SetLocalDescription, before the far side had the
+description -- and pion refused them; on a loaded runner both directions lost
+every one. It now holds them until the description lands, as the browser
+does (`TestCandidatesBeforeTheirDescriptionStillConnect` delays descriptions
+200 ms and fails without the fix with the runner's exact signature).
+Production was not affected: the gateway applies each connection's messages
+in order. Job logs need a login; failing harnesses and Go tests now report as
+annotations, which the public API returns.
+
+**Sign-up proves the address (severe).** Open sign-up created the account
+for whatever address was typed, so a stranger could register
+alice@your-org.com and appear in the organisation's address book as Alice,
+or claim bob@gmail.com before Bob and receive what was meant for him. With
+mail configured, a sign-up creates no account: a pending row (address, name,
+password hash) keyed by a link token's hash, 24 h, three per address. The
+account exists only when the link is opened and the password chosen at
+sign-up is typed again -- both, because re-submitting sign-up for someone
+else's address with your own password must not yield a link that gives you
+their account when they click it (tested). An address that already has an
+account gets a notice email (at most one a minute, carrying no link) and no
+row; the caller sees the same words after the same 600 ms floor. Without
+mail, sign-up works as before except for the organisation's own domains,
+which nothing could prove, so an administrator creates those. Seven planted
+faults each fail a test; `tools/e2e/signup.e2e.mjs` runs it in a phone-sized
+browser against Mailpit (17 checks, including the stranger's link refusing
+the owner's password) and fails against the previous server, where the
+account works before any link. Every harness's account creation now goes
+through the emailed link, as a person's does.

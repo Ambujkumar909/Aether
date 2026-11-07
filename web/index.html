@@ -171,6 +171,7 @@
             </div>
             <p class="hint" id="su-hint">At least 12 characters. Length matters more than symbols.</p>
             <div class="auth-error hidden" id="su-error"></div>
+            <div class="auth-ok hidden" id="su-done" role="status"></div>
             <button class="pill-btn" id="su-submit" type="submit">
               <span class="pill-badge">
                 <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
@@ -192,6 +193,21 @@
                 <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
               </span>
               <span class="pill-text">Send the link</span>
+            </button>
+          </form>
+
+          <form id="verify-form" class="hidden" autocomplete="on">
+            <p class="hint">Enter the password you chose when you signed up. That finishes creating your account and signs you in.</p>
+            <div class="uline">
+              <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><use href="#i-lock" /></svg>
+              <input id="vf-pass" type="password" placeholder="Password" autocomplete="current-password" required />
+            </div>
+            <div class="auth-error hidden" id="vf-error" role="alert"></div>
+            <button class="pill-btn" id="vf-submit" type="submit">
+              <span class="pill-badge">
+                <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
+              </span>
+              <span class="pill-text">Finish creating my account</span>
             </button>
           </form>
 
