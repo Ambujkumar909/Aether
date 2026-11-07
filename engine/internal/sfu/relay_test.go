@@ -74,9 +74,8 @@ func TestClientConnectsThroughRelayOnly(t *testing.T) {
 	select {
 	case <-bob.gotTrack:
 	case <-time.After(30 * time.Second):
-		t.Fatalf("relay-only client never received a track through the TURN relay "+
-			"(bob.sub ice=%s, bob.pub ice=%s)",
-			bob.peer.sub.ICEConnectionState(), bob.peer.pub.ICEConnectionState())
+		t.Fatalf("relay-only client never received a track through the TURN relay | alice: %s | bob: %s",
+			alice.diag(), bob.diag())
 	}
 
 	// The server-side pair must show the SERVER on its media port and the

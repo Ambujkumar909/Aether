@@ -1,8 +1,10 @@
 package sfu
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -339,4 +341,29 @@ func TestTwoPeersExchangeMediaThroughTheRouter(t *testing.T) {
 	}
 	t.Logf("ledger: %s total, %.1f%% payload efficiency",
 		ledger.Human(snap.Total()), 100*snap.Efficiency())
+}
+
+// diag describes both of this client's connections and the server's, for a
+// failure message: on a CI runner the message is all there is to read.
+func (c *client) diag() string {
+	one := func(name string, pc *webrtc.PeerConnection) string {
+		if pc == nil {
+			return name + "=nil"
+		}
+		local, remote := 0, 0
+		for _, s := range pc.GetStats() {
+			switch s.(type) {
+			case webrtc.ICECandidateStats:
+				if s.(webrtc.ICECandidateStats).Type == webrtc.StatsTypeLocalCandidate {
+					local++
+				} else {
+					remote++
+				}
+			}
+		}
+		return fmt.Sprintf("%s=%s/%s/%s cand %d+%d", name, pc.SignalingState(), pc.ICEConnectionState(),
+			pc.ICEGatheringState(), local, remote)
+	}
+	return strings.Join([]string{one("cli.pub", c.pub), one("cli.sub", c.sub),
+		one("srv.pub", c.peer.pub), one("srv.sub", c.peer.sub)}, "; ")
 }

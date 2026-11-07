@@ -97,7 +97,7 @@ func TestTwoTracksFromOnePublisherBothArrive(t *testing.T) {
 	select {
 	case <-bob.gotTrack:
 	case <-time.After(30 * time.Second):
-		t.Fatal("bob never received the camera")
+		t.Fatalf("bob never received the camera | alice: %s | bob: %s", alice.diag(), bob.diag())
 	}
 	for bob.received.Load() < 10 {
 		time.Sleep(100 * time.Millisecond)
