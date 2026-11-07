@@ -1,0 +1,7 @@
+# Run by Linux tools (bash, YAML parsers, Docker): always LF, whatever the
+# editor on Windows writes. A CRLF shell script fails to parse on the CI
+# runner (exit 2) while working in Git Bash.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
