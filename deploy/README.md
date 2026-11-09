@@ -80,6 +80,11 @@ complete SQLite database, checked before it is kept, taken without pausing
 the service. Tune with `AETHER_BACKUP_EVERY`, `AETHER_BACKUP_KEEP`,
 `AETHER_BACKUP_DIR`.
 
+`/data/aether.key` is the key that seals stored secrets (two-step sign-in).
+It is copied into `/data/backups` with every snapshot; a database restored on
+a new server without it has every second-step secret unreadable, so restore
+the key to `/data/aether.key` alongside the database.
+
 Take one now, and copy the backups off the server (a backup on the same disk
 does not survive the disk):
 
@@ -116,6 +121,16 @@ page does not offer reset.
 
 A link works once, for 30 minutes; asking again replaces it, and one account
 is sent at most one a minute. Using it ends every session the account had.
+
+## Two-step sign-in
+
+Anyone can turn on two-step sign-in in the console's account card: a code
+from an authenticator app (any TOTP app) after the password, and ten
+single-use recovery codes shown once. For a lost phone with no recovery
+codes, an administrator uses **Remove two-step** on the account in the
+console's user list; that ends every session the account has, and the person
+sets it up again after signing in with the password. Secrets are stored
+sealed with /data/aether.key (see Backups).
 
 ## Monitoring
 

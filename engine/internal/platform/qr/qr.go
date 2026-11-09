@@ -58,8 +58,12 @@ func dataCodewords(v int) int {
 	return n
 }
 
-// Encode draws text in the smallest version that holds it.
-func Encode(text string) (*Code, error) {
+// Encode draws text in the smallest version that holds it, with the mask
+// the penalty rules prefer.
+func Encode(text string) (*Code, error) { return encode(text, -1) }
+
+// encode is Encode with a chosen mask (0-7); -1 picks by penalty.
+func encode(text string, mask int) (*Code, error) {
 	data := []byte(text)
 	for v := 1; v <= 10; v++ {
 		countBits := 8
@@ -67,7 +71,7 @@ func Encode(text string) (*Code, error) {
 			countBits = 16
 		}
 		if 4+countBits+8*len(data) <= 8*dataCodewords(v) {
-			return build(v, data, countBits), nil
+			return build(v, data, countBits, mask), nil
 		}
 	}
 	return nil, ErrTooLong
@@ -90,7 +94,7 @@ func (w *bitBuf) put(v uint, bits int) {
 	}
 }
 
-func build(v int, data []byte, countBits int) *Code {
+func build(v int, data []byte, countBits, mask int) *Code {
 	capacity := dataCodewords(v)
 	w := &bitBuf{}
 	w.put(0b0100, 4) // byte mode
@@ -145,6 +149,9 @@ func build(v int, data []byte, countBits int) *Code {
 		}
 	}
 
+	if mask >= 0 {
+		return place(v, out, mask)
+	}
 	best, bestPenalty := (*Code)(nil), 0
 	for mask := 0; mask < 8; mask++ {
 		c := place(v, out, mask)
@@ -243,8 +250,11 @@ func place(v int, codewords []byte, mask int) *Code {
 	}
 	for _, ay := range alignment[v] {
 		for _, ax := range alignment[v] {
-			if reserved[ay][ax] {
-				continue // overlaps a finder
+			// The three that would sit on a finder are left out. Not "the
+			// centre is already reserved": from version 7 the timing
+			// pattern runs through some centres, and those are drawn.
+			if (ax < 9 && ay < 9) || (ax >= size-9 && ay < 9) || (ax < 9 && ay >= size-9) {
+				continue
 			}
 			for dy := -2; dy <= 2; dy++ {
 				for dx := -2; dx <= 2; dx++ {

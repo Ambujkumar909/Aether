@@ -5680,3 +5680,51 @@ browser against Mailpit (17 checks, including the stranger's link refusing
 the owner's password) and fails against the previous server, where the
 account works before any link. Every harness's account creation now goes
 through the emailed link, as a person's does.
+
+**Two-step sign-in.** A code from an authenticator app (TOTP, RFC 6238:
+HMAC-SHA1, 30 s, six digits, one step of skew either way) after the
+password, or one of ten single-use recovery codes. The password check and
+the code are two requests joined by a ticket held in memory (5 minutes,
+bounded at 10,000, five wrong codes spend it and count one failed sign-in
+toward the lockout); no session exists between them, and `Authenticate`
+refuses an account that owes a code (`ErrSecondStepRequired`), so no caller
+can skip the step by using the old method. The secret is stored sealed
+(`internal/platform/seal`: AES-256-GCM under a key the server makes on first
+start beside its database, HKDF-separated from the HMAC key for recovery
+codes, a fresh nonce per value, bound to the account id so a value moved to
+another row does not open); recovery codes are keyed hashes. A code is
+accepted once: `ConsumeTOTPStep` records the step in one UPDATE guarded by
+`last_step < ?`, so of eight sign-ins racing with one code exactly one wins
+(tested; the sequential check alone lets all eight through, and the test
+fails with that guard removed). Turning it on needs the password, then a
+code from the new secret, and ends every other session; turning it off
+needs the password; an administrator can remove it for a lost phone, which
+ends every session. The sealing key is copied into every backup
+(`backup.Options.KeyPath`): a database restored without it has every secret
+unreadable, which would lock everyone out of their second step.
+
+The QR code for enrolment is drawn by `internal/platform/qr` (byte mode,
+level M, versions 1-10, one SVG path, no script): small, and what it draws
+is a secret, so nothing is imported for it. Verified two ways. Against
+`qrencode` (libqrencode, the reference encoder), every one of 13 codes --
+one per version 1-10, the otpauth URI, UTF-8 -- matches module for module
+once the mask is the same (mask choice is a tie-break both may make
+differently). Against `zbar`, a decoder, 12 of 13 decode byte-exact; the
+13th, version 7 under mask 2, zbar misreads -- and misreads qrencode's own
+image of it identically (130 bytes for 122, the same wrong tail), while the
+same code under the other seven masks decodes. Finding the reference
+disagreement took three tries: zbar in a bare container has no PNG reader
+(install imagemagick), BusyBox `head -c -1` silently emptied every result,
+and qrencode's `ASCIIi` output is inverted. One encoder bug came out of it:
+alignment patterns whose centre lies on the timing pattern (first in
+version 7) were skipped, which shifted every data bit after them.
+
+Planted and caught: replay under concurrency, unlimited tries, a reusable
+recovery code, `Authenticate` without the guard, the secret stored in clear,
+other sessions kept on enable, an unbounded ticket store.
+`tools/e2e/twostep.e2e.mjs` runs the whole flow in a phone-sized browser --
+the console's account card draws the QR and the key, the harness computes
+codes as an app would, the sign-in card's code step, a replay, a recovery
+code typed in lower case, turning it off -- 13 checks. It also found that a
+code used to turn two-step on cannot sign in within the same 30 s window
+(correct: a code is taken once), which the harness now says in words.

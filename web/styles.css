@@ -7982,3 +7982,8 @@ input, textarea, [contenteditable] { caret-color: var(--brand); }
 /* In the strip, the face sits above the name plate, not under it: the
    placeholder centres the avatar in the room the plate leaves. */
 .shell.meet .stage:not([data-mode="grid"]) .strip-ph { box-sizing: border-box; padding-bottom: 34px; }
+
+/* Two-step sign-in, in the console's account card. */
+.ts-qr { width: min(240px, 100%); margin: 12px 0; }
+.ts-qr svg { width: 100%; height: auto; display: block; border-radius: var(--r-md); }
+.ts-codes { margin: 10px 0 0; padding: 12px 14px; background: var(--brand-soft); border-radius: var(--r-md); font-size: 14px; line-height: 1.7; user-select: all; }

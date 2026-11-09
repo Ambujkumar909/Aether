@@ -180,6 +180,21 @@
             </button>
           </form>
 
+          <form id="code-form" class="hidden" autocomplete="off">
+            <p class="hint">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+            <div class="uline">
+              <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><use href="#i-lock" /></svg>
+              <input id="cd-code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code" maxlength="20" required />
+            </div>
+            <div class="auth-error hidden" id="cd-error" role="alert"></div>
+            <button class="pill-btn" id="cd-submit" type="submit">
+              <span class="pill-badge">
+                <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><use href="#i-arrow-right" /></svg>
+              </span>
+              <span class="pill-text">Sign in</span>
+            </button>
+          </form>
+
           <form id="forgot-form" class="hidden" autocomplete="on">
             <p class="hint">Enter the email you sign in with. If it has an account, a link to choose a new password is sent there.</p>
             <div class="uline">

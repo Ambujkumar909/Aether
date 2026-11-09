@@ -106,8 +106,23 @@ export const session = {
 
 export async function login(email, password) {
   const res = await api.post('/api/identity/login', { email, password });
+  // An account with two-step sign-in: the password was right, a code is
+  // owed. No session yet; the ticket goes back with the code.
+  if (res?.secondStep) return { secondStep: res.secondStep, ticket: res.ticket };
   return session.adopt(res);
 }
+
+export async function secondStep(ticket, code) {
+  const res = await api.post('/api/identity/login/second', { ticket, code });
+  return session.adopt(res);
+}
+
+export const twoStep = {
+  setup: (password) => api.post('/api/identity/two-step/setup', { password }),
+  enable: (code) => api.post('/api/identity/two-step/enable', { code }),
+  disable: (password) => api.post('/api/identity/two-step/disable', { password }),
+  reset: (userId) => api.del(`/api/identity/users/${encodeURIComponent(userId)}/two-step`),
+};
 
 export async function logout() {
   try {

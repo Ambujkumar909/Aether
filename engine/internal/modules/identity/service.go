@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/aether-rtc/aether/internal/modules/audit"
+	"github.com/aether-rtc/aether/internal/platform/seal"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -97,6 +98,15 @@ type Service struct {
 	SendVerify       func(email, token string)
 	SendSignupNotice func(email string)
 	notices          noticeThrottle
+
+	// Sealer protects stored secrets (two-step sign-in) with the server's
+	// key; nil turns two-step sign-in off. tickets hold sign-ins between the
+	// password and the code.
+	Sealer  *seal.Sealer
+	tickets ticketStore
+	// now is the clock the second step reads; nil is time.Now. Tests set
+	// it to step through 30-second windows without waiting.
+	now func() time.Time
 
 	// dummyHash makes an unknown-email login cost the same as a known one.
 	// Without it, response time discloses which addresses are registered,
@@ -251,7 +261,9 @@ func NormalizeEmail(e string) (string, error) {
 // Telling an attacker whether the email exists, or whether the password was
 // merely wrong versus the account suspended, hands them a free oracle. The
 // audit log records the true reason; the response does not.
-func (s *Service) Authenticate(ctx context.Context, email, password, ip, ua string) (*User, string, error) {
+// checkPassword is the first step of a sign-in: every refusal, the lockout,
+// and the audit of each. It starts no session.
+func (s *Service) checkPassword(ctx context.Context, email, password, ip, ua string) (*User, error) {
 	now := time.Now().UTC()
 	norm, err := NormalizeEmail(email)
 	if err != nil {
@@ -262,20 +274,20 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip, ua stri
 			Action: audit.ActionLoginFailed, Outcome: audit.OutcomeFailure,
 			Subject: email, IP: ip, UserAgent: ua, Detail: "malformed email",
 		})
-		return nil, "", ErrInvalidCredential
+		return nil, ErrInvalidCredential
 	}
 
 	u, err := s.repo.UserByEmail(ctx, norm)
 	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
-			return nil, "", err
+			return nil, err
 		}
 		VerifyPassword(password, s.dummyHash)
 		s.record(ctx, audit.Event{
 			Action: audit.ActionLoginFailed, Outcome: audit.OutcomeFailure,
 			Subject: norm, IP: ip, UserAgent: ua, Detail: "no such account",
 		})
-		return nil, "", ErrInvalidCredential
+		return nil, ErrInvalidCredential
 	}
 
 	if u.Locked(now) {
@@ -285,34 +297,12 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip, ua stri
 			ActorID: u.ID, ActorEmail: u.Email, Subject: norm,
 			IP: ip, UserAgent: ua, Detail: "account locked",
 		})
-		return nil, "", ErrInvalidCredential
+		return nil, ErrInvalidCredential
 	}
 
 	if !VerifyPassword(password, u.passwordHash) {
-		u.FailedLogins++
-		detail := "wrong password"
-		if u.FailedLogins >= MaxFailedLogins {
-			until := now.Add(LockoutDuration)
-			u.LockedUntil = &until
-			u.FailedLogins = 0
-			detail = fmt.Sprintf("wrong password, locked until %s", until.Format(time.RFC3339))
-			s.record(ctx, audit.Event{
-				Action: audit.ActionAccountLocked, Outcome: audit.OutcomeDenied,
-				ActorID: u.ID, ActorEmail: u.Email, Subject: u.Email,
-				IP: ip, UserAgent: ua,
-				Detail: fmt.Sprintf("after %d failed attempts", MaxFailedLogins),
-			})
-		}
-		u.UpdatedAt = now
-		if err := s.repo.UpdateUser(ctx, u); err != nil {
-			s.log.Error("failed to record login failure", "err", err)
-		}
-		s.record(ctx, audit.Event{
-			Action: audit.ActionLoginFailed, Outcome: audit.OutcomeFailure,
-			ActorID: u.ID, ActorEmail: u.Email, Subject: norm,
-			IP: ip, UserAgent: ua, Detail: detail,
-		})
-		return nil, "", ErrInvalidCredential
+		s.loginFailed(ctx, u, ip, ua, "wrong password")
+		return nil, ErrInvalidCredential
 	}
 
 	if u.Status == StatusSuspended {
@@ -321,29 +311,78 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip, ua stri
 			ActorID: u.ID, ActorEmail: u.Email, Subject: norm,
 			IP: ip, UserAgent: ua, Detail: "account suspended",
 		})
-		return nil, "", ErrInvalidCredential
+		return nil, ErrInvalidCredential
 	}
 
-	// Success. Clear the failure counters.
+	return u, nil
+}
+
+// loginFailed counts a wrong password (or a spent second-step ticket) toward
+// the lockout and records it.
+func (s *Service) loginFailed(ctx context.Context, u *User, ip, ua, detail string) {
+	now := time.Now().UTC()
+	u.FailedLogins++
+	if u.FailedLogins >= MaxFailedLogins {
+		until := now.Add(LockoutDuration)
+		u.LockedUntil = &until
+		u.FailedLogins = 0
+		detail = fmt.Sprintf("%s, locked until %s", detail, until.Format(time.RFC3339))
+		s.record(ctx, audit.Event{
+			Action: audit.ActionAccountLocked, Outcome: audit.OutcomeDenied,
+			ActorID: u.ID, ActorEmail: u.Email, Subject: u.Email,
+			IP: ip, UserAgent: ua,
+			Detail: fmt.Sprintf("after %d failed attempts", MaxFailedLogins),
+		})
+	}
+	u.UpdatedAt = now
+	if err := s.repo.UpdateUser(ctx, u); err != nil {
+		s.log.Error("failed to record login failure", "err", err)
+	}
+	s.record(ctx, audit.Event{
+		Action: audit.ActionLoginFailed, Outcome: audit.OutcomeFailure,
+		ActorID: u.ID, ActorEmail: u.Email, Subject: u.Email,
+		IP: ip, UserAgent: ua, Detail: detail,
+	})
+}
+
+// finishLogin is a sign-in past every check: counters cleared, a session
+// minted, the success recorded (detail names the second step, if any).
+func (s *Service) finishLogin(ctx context.Context, u *User, ip, ua, detail string) (string, error) {
+	now := time.Now().UTC()
 	u.FailedLogins = 0
 	u.LockedUntil = nil
 	u.LastLoginAt = &now
 	u.UpdatedAt = now
 	if err := s.repo.UpdateUser(ctx, u); err != nil {
-		return nil, "", err
+		return "", err
 	}
-
-	token, sess, err := s.newSession(ctx, u.ID, ip, ua, now)
+	token, _, err := s.newSession(ctx, u.ID, ip, ua, now)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
-	_ = sess
-
 	s.record(ctx, audit.Event{
 		Action: audit.ActionLoginSucceeded, Outcome: audit.OutcomeSuccess,
 		ActorID: u.ID, ActorEmail: u.Email, Subject: u.Email,
-		IP: ip, UserAgent: ua,
+		IP: ip, UserAgent: ua, Detail: detail,
 	})
+	return token, nil
+}
+
+// Authenticate signs in an account that has no second step. One that does
+// is refused here (ErrSecondStepRequired): Login and SecondStep are its flow,
+// and no caller can skip the code by calling this instead.
+func (s *Service) Authenticate(ctx context.Context, email, password, ip, ua string) (*User, string, error) {
+	u, err := s.checkPassword(ctx, email, password, ip, ua)
+	if err != nil {
+		return nil, "", err
+	}
+	if s.twoStepOn(ctx, u.ID) {
+		return nil, "", ErrSecondStepRequired
+	}
+	token, err := s.finishLogin(ctx, u, ip, ua, "")
+	if err != nil {
+		return nil, "", err
+	}
 	return u, token, nil
 }
 

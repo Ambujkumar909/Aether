@@ -783,6 +783,24 @@ var migrations = []migration{
 			expires_at    INTEGER NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS identity_signups_email ON identity_signups(email, created_at)`},
+	// Two-step sign-in (identity/twostep.go): the authenticator secret
+	// sealed with the server's key, the last time step accepted (replay),
+	// and recovery codes as keyed hashes. Both gone with the account.
+	{"0070_identity_two_step", `
+		CREATE TABLE IF NOT EXISTS identity_two_step (
+			user_id    TEXT PRIMARY KEY REFERENCES identity_users(id) ON DELETE CASCADE,
+			secret     BLOB NOT NULL,
+			enabled    INTEGER NOT NULL DEFAULT 0,
+			last_step  INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			enabled_at INTEGER
+		);
+		CREATE TABLE IF NOT EXISTS identity_recovery_codes (
+			user_id  TEXT NOT NULL REFERENCES identity_users(id) ON DELETE CASCADE,
+			code_mac TEXT NOT NULL,
+			used_at  INTEGER,
+			PRIMARY KEY (user_id, code_mac)
+		)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

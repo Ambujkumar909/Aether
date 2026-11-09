@@ -13,7 +13,8 @@ failing steps report as annotations at `.../check-runs/<id>/annotations`,
 because job logs need a login).
 
 **Next, in order:**
-1. **Two-step sign-in (TOTP).** Done and tested, not wired:
+1. **Two-step sign-in (TOTP).** DONE 2026-11-09 (ARCHITECTURE 6by; the
+   notes below are kept for the record). Was: done and tested, not wired:
    `identity/totp.go` (RFC 6238 vectors, replay-proof, +-1 step),
    `internal/platform/seal` (AES-256-GCM at rest bound to the account id,
    HMAC "pepper" for recovery codes, key file created atomically). Written
@@ -28,7 +29,7 @@ because job logs need a login).
    endpoints (password re-check, revoke other sessions on enable), admin
    reset for a lost phone, audit events, the console Account card and an
    auth-card "code" view; e2e with a TOTP computed in the harness.
-2. SSO/OIDC; remaining abuse controls for public sign-up (a global sign-up
+2. **Next: SSO/OIDC** (identity provider sign-in for the org; the second step and password reset stay for local accounts). Then the remaining abuse controls for public sign-up (a global sign-up
    rate, disposable-domain policy); capacity test; Windows installer and
    auto-update (exe resources done: `tools/winres.sh`, needs MinGW windres);
    the project's own LICENSE (the owner's choice -- ask).
@@ -281,6 +282,8 @@ feature, but everything seen or heard is Aether's own.
 
 - The Bash tool fails on heredocs containing some quote mixes ("unexpected EOF"): write the content with the Write tool, then `cat`/`python` it in.
 - `cd` into `C:\Program Files\WindowsApps` is denied; reading files by full path works.
+- `until(page, fn)` in meet.lib returns FALSE on timeout, it does not throw: a harness that waits for home and then calls the API sees a confusing 401 when the sign-in itself failed (a 429 from the login limiter: 5/min, burst 10 per address, shared with the second-step endpoint). Assert the outcome after a wait, as twostep.e2e.mjs signIn does, and budget sign-ins per harness.
+- Windows reserves random port ranges at boot (Hyper-V/WSL): `netsh interface ipv4 show excludedportrange protocol=udp`. When one overlaps the relay range, `docker run` fails to publish ("forbidden by its access permissions"), the container never appears healthy, and media never connects. `docker-run.ps1 -RelayPorts <a free range>` publishes another; this is a test-machine problem only (Linux has no such reservation).
 - The layout harness checks overflow, tap size and meeting-bar overlap only; still look at the screenshots for everything else.
 - `go test -race ./...` runs packages in parallel; the 100-person fan-out test can miss real time from CPU starvation alone. If it fails only there, run it alone (and the suite with `-p 1`) before suspecting code.
 - Signup is limited to 3 an hour per address (in memory): a fresh server for an e2e needing four new accounts means a restart halfway. `accounts()` now saves each account as soon as it is made.

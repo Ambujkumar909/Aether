@@ -31,6 +31,7 @@ import (
 	"github.com/aether-rtc/aether/internal/platform/database"
 	"github.com/aether-rtc/aether/internal/platform/httpx"
 	"github.com/aether-rtc/aether/internal/platform/mail"
+	"github.com/aether-rtc/aether/internal/platform/seal"
 	"github.com/aether-rtc/aether/internal/relay"
 	"github.com/aether-rtc/aether/internal/room"
 	"github.com/aether-rtc/aether/internal/sfu"
@@ -101,6 +102,8 @@ func main() {
 	smtpPassword := flag.String("smtp-password", "", "outgoing mail password (prefer AETHER_SMTP_PASSWORD: a flag shows in the process list)")
 	smtpFrom := flag.String("smtp-from", "", "the address email comes from, e.g. noreply@example.com")
 	smtpCA := flag.String("smtp-ca", "", "a PEM certificate authority to trust for the mail server, beside the system's")
+	sealKey := flag.String("seal-key", "",
+		"file holding the key that seals stored secrets (two-step sign-in); made on first start (default: aether.key beside the database)")
 	metricsAddr := flag.String("metrics-addr", "",
 		"serve Prometheus metrics at /metrics on this address, plain HTTP: keep it on a private network (e.g. 127.0.0.1:9464); empty turns it off")
 	healthcheck := flag.Bool("healthcheck", false,
@@ -121,6 +124,10 @@ func main() {
 	}
 	bopts := backup.Options{DBPath: *dbPath, FilesDir: filepath.Join(filepath.Dir(*dbPath), "files"),
 		Dir: *backupDir, Keep: *backupKeep}
+	if *sealKey == "" {
+		*sealKey = filepath.Join(filepath.Dir(*dbPath), "aether.key")
+	}
+	bopts.KeyPath = *sealKey
 	if bopts.Dir == "" {
 		bopts.Dir = filepath.Join(filepath.Dir(*dbPath), "backups")
 	}
@@ -375,6 +382,17 @@ func main() {
 	// name the way a company address book works. Empty by default; naming a
 	// public provider here is refused rather than honoured.
 	identityModule.Service.OrgDomains = settingsModule.Service.OrgDomains
+	// The key that seals stored secrets, made on first start and backed up
+	// with the database (backup.Options.KeyPath).
+	sealKeyBytes, err := seal.LoadOrCreateKey(*sealKey)
+	if err != nil {
+		log.Error("seal key", "path", *sealKey, "err", err)
+		os.Exit(1)
+	}
+	if identityModule.Service.Sealer, err = seal.New(sealKeyBytes); err != nil {
+		log.Error("seal key", "err", err)
+		os.Exit(1)
+	}
 	// Outgoing email, through whatever SMTP server the operator names.
 	var mailQueue *mail.Queue
 	switch {

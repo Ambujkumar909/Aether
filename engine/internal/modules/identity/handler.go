@@ -83,6 +83,16 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.login)))
 	mux.Handle("POST /api/identity/signup",
 		httpx.RateLimit(h.signupLimit, h.limitKey, http.HandlerFunc(h.signup)))
+	mux.Handle("POST /api/identity/login/second",
+		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.secondStep)))
+	mux.Handle("POST /api/identity/two-step/setup",
+		h.RequireAuth(h.csrf(http.HandlerFunc(h.twoStepSetup))))
+	mux.Handle("POST /api/identity/two-step/enable",
+		h.RequireAuth(h.csrf(http.HandlerFunc(h.twoStepEnable))))
+	mux.Handle("POST /api/identity/two-step/disable",
+		h.RequireAuth(h.csrf(http.HandlerFunc(h.twoStepDisable))))
+	mux.Handle("DELETE /api/identity/users/{id}/two-step",
+		h.RequirePermission(PermUserWrite, h.csrf(http.HandlerFunc(h.twoStepReset))))
 	mux.Handle("POST /api/identity/signup/verify",
 		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.completeSignup)))
 	mux.HandleFunc("GET /api/identity/config", h.config)
@@ -159,11 +169,21 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	ip := httpx.ClientIP(r, h.TrustProxy)
 	ua := r.UserAgent()
 
-	u, token, err := h.svc.Authenticate(r.Context(), req.Email, req.Password, ip, ua)
-	if err != nil {
-		// One message for every failure mode. See Service.Authenticate.
+	u, token, ticket, err := h.svc.Login(r.Context(), req.Email, req.Password, ip, ua)
+	if errors.Is(err, ErrInvalidCredential) {
+		// One message for every refusal. See Service.checkPassword.
 		httpx.Error(w, http.StatusUnauthorized, "invalid_credentials",
 			"email or password is incorrect")
+		return
+	}
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	if ticket != "" {
+		// The password was right; a code from the authenticator app (or a
+		// recovery code) is still owed, within TicketTTL. No session yet.
+		httpx.JSON(w, http.StatusOK, map[string]any{"secondStep": "code", "ticket": ticket})
 		return
 	}
 
@@ -183,6 +203,7 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"minPasswordLength": MinPasswordLength,
 		"passwordReset":     h.svc.SendReset != nil,
 		"verifySignup":      h.svc.SendVerify != nil,
+		"twoStep":           h.svc.Sealer != nil,
 	}
 	// The relay's URLs and a fresh credential, when a relay is running. This
 	// is why the client fetches config on join rather than hard-coding ICE
@@ -275,12 +296,14 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	u := UserFrom(r.Context())
 	sess := SessionFrom(r.Context())
+	on, left := h.svc.TwoStepStatus(r.Context(), u.ID)
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"user":        view(u),
 		"permissions": u.Role.Permissions(),
 		"session": map[string]any{
 			"id": sess.ID, "expiresAt": sess.ExpiresAt, "ip": sess.IP,
 		},
+		"twoStep": map[string]any{"available": h.svc.Sealer != nil, "enabled": on, "recoveryCodesLeft": left},
 	})
 }
 

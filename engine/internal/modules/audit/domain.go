@@ -33,6 +33,10 @@ const (
 	ActionPasswordChanged    Action = "auth.password.changed"
 	ActionPasswordResetAsked Action = "auth.password.reset.requested"
 	ActionPasswordReset      Action = "auth.password.reset"
+	ActionSecondStepFailed   Action = "auth.second_step.failed"
+	ActionTwoStepEnabled     Action = "auth.two_step.enabled"
+	ActionTwoStepDisabled    Action = "auth.two_step.disabled"
+	ActionTwoStepReset       Action = "auth.two_step.reset"
 
 	ActionSignUp        Action = "auth.signup"
 	ActionSignUpBlocked Action = "auth.signup.blocked"

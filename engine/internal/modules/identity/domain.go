@@ -180,6 +180,9 @@ var (
 	// Named for what the caller is told rather than what happened, because
 	// what happened is deliberately not disclosed.
 	ErrSignupPending = errors.New("identity: check your email to continue")
+	// ErrSecondStepRequired: Authenticate was asked to sign in an account
+	// that owes a code; Login is the full flow.
+	ErrSecondStepRequired = errors.New("identity: a second step is required")
 )
 
 // UserFilter narrows a user listing.
@@ -249,6 +252,17 @@ type Repository interface {
 	SavePendingSignup(ctx context.Context, tokenHash, email, name, passwordHash string, created, expires time.Time) error
 	PendingSignup(ctx context.Context, tokenHash string, now time.Time) (*pendingSignup, error)
 	ClearPendingSignups(ctx context.Context, email string) error
+
+	// Two-step sign-in (twostep.go).
+	TwoStep(ctx context.Context, userID string) (*twoStep, error)
+	SaveTwoStep(ctx context.Context, userID string, sealed []byte, at time.Time) error
+	EnableTwoStep(ctx context.Context, userID string, step int64, at time.Time) error
+	ConsumeTOTPStep(ctx context.Context, userID string, step int64) (bool, error)
+	DeleteTwoStep(ctx context.Context, userID string) error
+	ReplaceRecoveryCodes(ctx context.Context, userID string, macs []string) error
+	UseRecoveryCode(ctx context.Context, userID, mac string, at time.Time) (bool, error)
+	RecoveryCodesLeft(ctx context.Context, userID string) (int, error)
+	RevokeOtherSessions(ctx context.Context, userID, keepID string, at time.Time) (int, error)
 }
 
 // Reader is the narrow interface other modules depend on, per the module

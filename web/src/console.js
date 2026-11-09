@@ -4,7 +4,7 @@
 // things you do while half-attending a meeting, and giving them room is what
 // makes a fifty-row audit table readable instead of a scrolling slit.
 
-import { session, users, audit, settings, ROLES, ApiError } from './api.js';
+import { session, users, audit, settings, twoStep, api, ROLES, ApiError } from './api.js';
 
 const esc = (s) =>
   String(s ?? '').replace(
@@ -204,6 +204,23 @@ async function renderUsers() {
         }
       };
     });
+    body.querySelectorAll('[data-twostep-reset]').forEach((btn) => {
+      btn.onclick = async () => {
+        const ok = await confirmDialog(
+          'Remove two-step sign-in?',
+          `${btn.dataset.email} will sign in with their password alone until they set it up again, and every session they have ends. For a lost phone with no recovery codes.`,
+          'Remove'
+        );
+        if (!ok) return;
+        try {
+          await twoStep.reset(btn.dataset.twostepReset);
+          toast('Two-step sign-in removed; their sessions were ended.');
+        } catch (e) {
+          if (e instanceof ApiError && e.code === 'two_step_not_set_up') toast('That account has no two-step sign-in.');
+          else fail(e);
+        }
+      };
+    });
     body.querySelectorAll('[data-delete]').forEach((btn) => {
       btn.onclick = async () => {
         const id = btn.dataset.delete;
@@ -251,6 +268,7 @@ function userRow(u, canWrite, canDelete) {
       : `<button class="btn btn-quiet" data-suspend="${esc(u.id)}" data-status="${esc(u.status)}">
            ${u.status === 'active' ? 'Suspend' : 'Reactivate'}
          </button>` +
+        `<button class="btn btn-quiet" data-twostep-reset="${esc(u.id)}" data-email="${esc(u.email)}" title="For a lost phone: removes their two-step sign-in and ends their sessions">Remove two-step</button>` +
         (canDelete
           ? `<button class="btn btn-danger-quiet" data-delete="${esc(u.id)}" data-email="${esc(u.email)}">Delete</button>`
           : '');
@@ -517,14 +535,44 @@ async function renderSessions() {
 // Account
 // ---------------------------------------------------------------------------
 
-function renderAccount() {
+async function renderAccount() {
   const u = session.user;
   const body = document.getElementById('console-body');
+  // Two-step sign-in state comes from the server, not from memory: what is
+  // shown is what is stored.
+  let ts = { available: false, enabled: false, recoveryCodesLeft: 0 };
+  try {
+    ts = (await api.get('/api/identity/me')).twoStep ?? ts;
+  } catch {}
   body.innerHTML = section(
     'Your account',
-    'Change your password and review what your role permits.',
+    'Change your password, protect sign-in with a second step, and review what your role permits.',
     '',
     `<div class="cards">
+       ${ts.available ? `<div class="card" id="ts-card">
+         <h3>Two-step sign-in</h3>
+         ${ts.enabled
+           ? `<p class="hint">On. Signing in asks for a code from your authenticator app. ${ts.recoveryCodesLeft} recovery code${ts.recoveryCodesLeft === 1 ? '' : 's'} left.</p>
+              <label class="field"><span>Your password, to turn it off</span>
+                <input id="ts-off-pw" class="input" type="password" autocomplete="current-password" /></label>
+              <button class="btn" id="ts-off">Turn off two-step sign-in</button>`
+           : `<p class="hint">Off. With it on, signing in needs your password and a code from an authenticator app (any TOTP app), so a stolen password alone is not enough.</p>
+              <label class="field"><span>Your password, to begin</span>
+                <input id="ts-pw" class="input" type="password" autocomplete="current-password" /></label>
+              <button class="btn btn-primary" id="ts-start">Set up two-step sign-in</button>
+              <div id="ts-setup" class="hidden">
+                <p class="hint">Scan this with your authenticator app, or type the key into it. Then enter the code the app shows.</p>
+                <div class="ts-qr" id="ts-qr"></div>
+                <p class="hint">Key: <code class="mono" id="ts-secret"></code></p>
+                <label class="field"><span>Code from the app</span>
+                  <input id="ts-code" class="input" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>
+                <button class="btn btn-primary" id="ts-enable">Turn on</button>
+              </div>
+              <div id="ts-codes" class="hidden">
+                <p class="hint">Two-step sign-in is on. These recovery codes each work once if you lose the app. Keep them somewhere safe; they are shown only now.</p>
+                <pre class="ts-codes mono" id="ts-codes-list"></pre>
+              </div>`}
+       </div>` : ''}
        <div class="card">
          <h3>Password</h3>
          <label class="field"><span>Current password</span>
@@ -549,6 +597,38 @@ function renderAccount() {
        </div>
      </div>`
   );
+
+  document.getElementById('ts-start')?.addEventListener('click', async () => {
+    try {
+      const r = await twoStep.setup(document.getElementById('ts-pw').value);
+      document.getElementById('ts-qr').innerHTML = r.qr; // server-drawn SVG, no script in it
+      document.getElementById('ts-secret').textContent = r.secret;
+      document.getElementById('ts-setup').classList.remove('hidden');
+      document.getElementById('ts-code').focus();
+    } catch (e) {
+      fail(e);
+    }
+  });
+  document.getElementById('ts-enable')?.addEventListener('click', async () => {
+    try {
+      const r = await twoStep.enable(document.getElementById('ts-code').value);
+      document.getElementById('ts-setup').classList.add('hidden');
+      document.getElementById('ts-codes-list').textContent = r.recoveryCodes.join('\n');
+      document.getElementById('ts-codes').classList.remove('hidden');
+      toast('Two-step sign-in is on.');
+    } catch (e) {
+      fail(e);
+    }
+  });
+  document.getElementById('ts-off')?.addEventListener('click', async () => {
+    try {
+      await twoStep.disable(document.getElementById('ts-off-pw').value);
+      toast('Two-step sign-in is off.');
+      renderAccount();
+    } catch (e) {
+      fail(e);
+    }
+  });
 
   document.getElementById('pw-save').onclick = async () => {
     const cur = document.getElementById('pw-cur').value;

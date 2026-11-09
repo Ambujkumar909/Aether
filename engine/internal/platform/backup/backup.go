@@ -34,9 +34,13 @@ import (
 type Options struct {
 	DBPath   string // the live database
 	FilesDir string // uploaded files; empty skips them
-	Dir      string // where snapshots and the file mirror go
-	Keep     int    // database snapshots kept, newest first; <1 keeps 1
-	Now      func() time.Time
+	// KeyPath is the server's sealing key (internal/platform/seal): copied
+	// beside the snapshots, because a database restored without it has
+	// every sealed secret -- two-step sign-in -- unreadable. Empty skips it.
+	KeyPath string
+	Dir     string // where snapshots and the file mirror go
+	Keep    int    // database snapshots kept, newest first; <1 keeps 1
+	Now     func() time.Time
 }
 
 // Result says what one run produced.
@@ -95,6 +99,13 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		res.FilesCopied, res.FilesPruned, err = mirror(o.FilesDir, filepath.Join(o.Dir, "files"))
 		if err != nil {
 			return res, fmt.Errorf("backup: files: %w", err)
+		}
+	}
+	if o.KeyPath != "" {
+		if _, err := os.Stat(o.KeyPath); err == nil {
+			if err := copyFile(o.KeyPath, filepath.Join(o.Dir, filepath.Base(o.KeyPath))); err != nil {
+				return res, fmt.Errorf("backup: key: %w", err)
+			}
 		}
 	}
 	res.Removed, err = prune(o.Dir, o.Keep)

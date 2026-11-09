@@ -27,7 +27,7 @@ import {
 } from './wire.js';
 import { MediaPlane } from './rtc.js';
 import {
-  session, login, logout, resume, signup, completeSignup, serverConfig, forgotPassword, resetPassword,
+  session, login, secondStep, logout, resume, signup, completeSignup, serverConfig, forgotPassword, resetPassword,
   telemetry, scheduling, ApiError,
 } from './api.js';
 import {
@@ -7618,18 +7618,21 @@ function wireHome() {
 let authView = 'login';
 let authCfg = { allowSignup: false, passwordReset: false };
 let resetToken = '';
-const AUTH_FORMS = { login: 'login-form', signup: 'signup-form', forgot: 'forgot-form', reset: 'reset-form', verify: 'verify-form' };
+const AUTH_FORMS = { login: 'login-form', signup: 'signup-form', forgot: 'forgot-form', reset: 'reset-form', verify: 'verify-form', code: 'code-form' };
 const AUTH_TAGS = {
   login: 'Access your account',
   signup: 'Create your account',
   forgot: 'Reset your password',
   reset: 'Choose a new password',
   verify: 'Finish creating your account',
+  code: 'One more step',
 };
+// The ticket from a password that was right, while the code is owed.
+let loginTicket = '';
 function authMode(view, note = '') {
   authView = view;
   for (const [v, id] of Object.entries(AUTH_FORMS)) $(id).classList.toggle('hidden', v !== view);
-  for (const id of ['li-error', 'su-error', 'su-done', 'fp-error', 'rp-error', 'fp-done', 'vf-error']) $(id).classList.add('hidden');
+  for (const id of ['li-error', 'su-error', 'su-done', 'fp-error', 'rp-error', 'fp-done', 'vf-error', 'cd-error']) $(id).classList.add('hidden');
   $('li-done').textContent = note;
   $('li-done').classList.toggle('hidden', !note);
   document.querySelector('.auth-tagline').textContent = AUTH_TAGS[view];
@@ -7638,7 +7641,7 @@ function authMode(view, note = '') {
   $('swap-text').textContent = view === 'signup' ? 'Already have an account?' : back ? '' : 'New here?';
   $('swap-btn').textContent = back ? 'Back to sign in' : 'Create an account';
   $('auth-swap').classList.toggle('hidden', !back && !authCfg.allowSignup);
-  $({ login: 'li-email', signup: 'su-name', forgot: 'fp-email', reset: 'rp-pass', verify: 'vf-pass' }[view])?.focus();
+  $({ login: 'li-email', signup: 'su-name', forgot: 'fp-email', reset: 'rp-pass', verify: 'vf-pass', code: 'cd-code' }[view])?.focus();
 }
 
 // A reset or sign-up link carries its token in the fragment, which never
@@ -7663,8 +7666,14 @@ function wireAuth() {
     btn.disabled = true;
     err.classList.add('hidden');
     try {
-      await login($('li-email').value.trim(), $('li-pass').value);
+      const r = await login($('li-email').value.trim(), $('li-pass').value);
       $('li-pass').value = '';
+      if (r?.secondStep) {
+        loginTicket = r.ticket;
+        $('cd-code').value = '';
+        authMode('code');
+        return;
+      }
       await enterHome();
     } catch (e2) {
       // Only an actual rejection from the sign-in endpoint may be reported
@@ -7729,6 +7738,40 @@ function wireAuth() {
             ? e2.message
             : 'Something went wrong. Try again.';
       fpErr.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  const cdErr = $('cd-error');
+  $('code-form').onsubmit = async (e) => {
+    e.preventDefault();
+    cdErr.classList.add('hidden');
+    const btn = $('cd-submit');
+    btn.disabled = true;
+    try {
+      await secondStep(loginTicket, $('cd-code').value);
+      loginTicket = '';
+      $('cd-code').value = '';
+      await enterHome();
+    } catch (e2) {
+      if (e2 instanceof ApiError && e2.code === 'ticket_invalid') {
+        loginTicket = '';
+        authMode('login');
+        err.textContent = 'That took too long, or too many wrong codes. Sign in again.';
+        err.classList.remove('hidden');
+      } else if (e2 instanceof ApiError && e2.status === 401) {
+        cdErr.textContent = 'That code is not right. Check the app and try again.';
+        cdErr.classList.remove('hidden');
+        $('cd-code').select();
+      } else if (e2 instanceof ApiError && e2.status === 429) {
+        cdErr.textContent = 'Too many attempts. Wait a moment and try again.';
+        cdErr.classList.remove('hidden');
+      } else {
+        console.error('signed in but the app failed to start:', e2);
+        cdErr.textContent = 'Signed in, but something went wrong loading the app.';
+        cdErr.classList.remove('hidden');
+      }
     } finally {
       btn.disabled = false;
     }
