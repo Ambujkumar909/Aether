@@ -7706,7 +7706,34 @@ function wireAuth() {
       $('su-hint').textContent = hint;
       $('rp-hint').textContent = hint;
     }
+    // The organisation's identity provider, when one is configured. The
+    // whole sign-in happens there and on the server; this page only leaves
+    // for it and comes back signed in (or with #sso=<reason>).
+    if (c.sso?.name) {
+      $('li-sso-name').textContent = c.sso.name;
+      $('li-sso').classList.remove('hidden');
+      $('li-sso').onclick = () => {
+        const next = location.pathname + location.search;
+        location.href = '/api/identity/sso/start?next=' + encodeURIComponent(next);
+      };
+    }
   });
+  // Back from the provider without a session: say why, in the card.
+  const ssoBack = /^#sso=([a-z]+)$/.exec(location.hash);
+  if (ssoBack) {
+    history.replaceState(null, '', location.pathname + location.search);
+    const why = {
+      denied: 'Sign-in was cancelled at your organisation\'s sign-in page.',
+      expired: 'That sign-in took too long. Try again.',
+      refused: 'Your organisation\'s account cannot sign in here. Ask an administrator.',
+      state: 'That sign-in did not start from this browser. Try again.',
+      token: 'Your organisation\'s sign-in could not be verified. Try again.',
+      unavailable: 'Single sign-on is not available on this server.',
+      error: 'Something went wrong signing in. Try again.',
+    }[ssoBack[1]] || 'Sign-in did not finish. Try again.';
+    $('li-sso-error').textContent = why;
+    $('li-sso-error').classList.remove('hidden');
+  }
 
   $('li-forgot').onclick = () => {
     if (!authCfg.passwordReset) {

@@ -122,6 +122,16 @@ page does not offer reset.
 A link works once, for 30 minutes; asking again replaces it, and one account
 is sent at most one a minute. Using it ends every session the account had.
 
+## Single sign-on
+
+Set `AETHER_SSO_ISSUER`, `AETHER_SSO_CLIENT_ID` and `AETHER_SSO_CLIENT_SECRET`
+(see `env.example`) and the sign-in page shows "Sign in with <AETHER_SSO_NAME>".
+Register Aether at your provider with the redirect URL
+`https://<your host>/api/identity/sso/callback`. Only addresses the provider
+marks verified, in `AETHER_SSO_DOMAINS` (or the organisation's domains
+setting), may sign in this way; a new address becomes a member account.
+People signed in by the provider are not asked for the local second step.
+
 ## Two-step sign-in
 
 Anyone can turn on two-step sign-in in the console's account card: a code

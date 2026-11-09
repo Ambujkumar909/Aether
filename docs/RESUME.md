@@ -29,7 +29,7 @@ because job logs need a login).
    endpoints (password re-check, revoke other sessions on enable), admin
    reset for a lost phone, audit events, the console Account card and an
    auth-card "code" view; e2e with a TOTP computed in the harness.
-2. **Next: SSO/OIDC** (identity provider sign-in for the org; the second step and password reset stay for local accounts). Then the remaining abuse controls for public sign-up (a global sign-up
+2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). **Next:** the remaining abuse controls for public sign-up (a global sign-up
    rate, disposable-domain policy); capacity test; Windows installer and
    auto-update (exe resources done: `tools/winres.sh`, needs MinGW windres);
    the project's own LICENSE (the owner's choice -- ask).

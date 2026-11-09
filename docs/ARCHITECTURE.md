@@ -5728,3 +5728,38 @@ codes as an app would, the sign-in card's code step, a replay, a recovery
 code typed in lower case, turning it off -- 13 checks. It also found that a
 code used to turn two-step on cannot sign in within the same 30 s window
 (correct: a code is taken once), which the harness now says in words.
+
+**Single sign-on (OpenID Connect).** `-sso-issuer` names the organisation's
+identity provider -- Google Workspace, Microsoft Entra, Okta, Keycloak, any
+of them -- and `internal/platform/oidc` does the authorization code flow
+with PKCE on the standard library alone: discovery (the document must name
+the configured issuer, and every endpoint must be https), the provider's
+keys fetched and cached an hour, refetched once on an unknown key id (a
+rotation), RS256 and ES256 only. On the identity token: signature, issuer,
+audience, expiry and issue time with five minutes of skew, and the nonce
+this sign-in chose. State, nonce and the PKCE verifier travel in a sealed
+ten-minute cookie scoped to the callback path, so a callback that did not
+start in this browser, or started elsewhere, has nothing to match. The
+person is the account with the token's email, only when the provider marks
+it verified and only in an allowed domain (`-sso-domains`, or the
+organisation's domains setting; none at all refuses -- a provider that signs
+in anybody must not create accounts for anybody); a new address becomes a
+member with a password nobody knows. A provider-authenticated sign-in skips
+the local second step: the provider is the organisation's authority. The
+return path after sign-in is only ever a path on this origin. SSO has its
+own rate limit (1/s, burst 60 per address) rather than the password
+limiter's: there is no password to guess, and an office behind one address
+signs everybody in at once -- the shared limit refused the harness's sixth
+sign-in, which is how that was noticed.
+
+Eleven planted faults each fail a test: signature not checked (a token with
+every claim right, signed by another key under the same key id), nonce,
+audience, issuer and expiry not checked, an unverified address accepted,
+the domain gate removed, state not compared, an open redirect, a suspended
+account signing in. `tools/e2e/fakeidp.mjs` is a provider the harnesses run
+(discovery, keys, an authorize page a browser clicks through, a token
+endpoint signing RS256); `tools/e2e/sso.e2e.mjs` drives the button, the
+provider's page, a new member created and signed in where they started,
+the same account the second time, a cancelled sign-in, an unverified
+address, a disallowed domain, a callback without a start and a forged
+state: 15 checks.

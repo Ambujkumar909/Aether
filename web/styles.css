@@ -7987,3 +7987,8 @@ input, textarea, [contenteditable] { caret-color: var(--brand); }
 .ts-qr { width: min(240px, 100%); margin: 12px 0; }
 .ts-qr svg { width: 100%; height: auto; display: block; border-radius: var(--r-md); }
 .ts-codes { margin: 10px 0 0; padding: 12px 14px; background: var(--brand-soft); border-radius: var(--r-md); font-size: 14px; line-height: 1.7; user-select: all; }
+
+/* The second sign-in button: the organisation's provider. */
+.pill-alt { margin-top: 10px; background: var(--brand-soft); color: var(--brand); }
+.pill-alt .pill-badge { background: var(--brand); color: #fff; }
+#li-sso-error { margin-top: 12px; }

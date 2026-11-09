@@ -16,6 +16,7 @@ import (
 	ossignal "os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/aether-rtc/aether/internal/platform/database"
 	"github.com/aether-rtc/aether/internal/platform/httpx"
 	"github.com/aether-rtc/aether/internal/platform/mail"
+	"github.com/aether-rtc/aether/internal/platform/oidc"
 	"github.com/aether-rtc/aether/internal/platform/seal"
 	"github.com/aether-rtc/aether/internal/relay"
 	"github.com/aether-rtc/aether/internal/room"
@@ -102,6 +104,13 @@ func main() {
 	smtpPassword := flag.String("smtp-password", "", "outgoing mail password (prefer AETHER_SMTP_PASSWORD: a flag shows in the process list)")
 	smtpFrom := flag.String("smtp-from", "", "the address email comes from, e.g. noreply@example.com")
 	smtpCA := flag.String("smtp-ca", "", "a PEM certificate authority to trust for the mail server, beside the system's")
+	ssoIssuer := flag.String("sso-issuer", "",
+		"single sign-on: the OpenID Connect issuer URL of the organisation's identity provider (empty: off)")
+	ssoClientID := flag.String("sso-client-id", "", "single sign-on: the client id registered at the provider")
+	ssoClientSecret := flag.String("sso-client-secret", "", "single sign-on: the client secret (prefer AETHER_SSO_CLIENT_SECRET)")
+	ssoName := flag.String("sso-name", "your organisation", "single sign-on: the name on the sign-in button")
+	ssoDomains := flag.String("sso-domains", "",
+		"single sign-on: comma-separated email domains allowed to sign in this way (default: the organisation's domains setting)")
 	sealKey := flag.String("seal-key", "",
 		"file holding the key that seals stored secrets (two-step sign-in); made on first start (default: aether.key beside the database)")
 	metricsAddr := flag.String("metrics-addr", "",
@@ -382,6 +391,26 @@ func main() {
 	// name the way a company address book works. Empty by default; naming a
 	// public provider here is refused rather than honoured.
 	identityModule.Service.OrgDomains = settingsModule.Service.OrgDomains
+	// Single sign-on through the organisation's identity provider.
+	if *ssoIssuer != "" {
+		if linkBase == "" {
+			log.Error("sso: -public-url (or an ACME domain) is required: the provider sends people back to it")
+			os.Exit(2)
+		}
+		prov, err := oidc.New(ctx, *ssoIssuer, *ssoClientID, *ssoClientSecret, linkBase+"/api/identity/sso/callback", nil)
+		if err != nil {
+			log.Error("sso", "err", err)
+			os.Exit(1)
+		}
+		var ssoDoms []string
+		for _, d := range strings.Split(*ssoDomains, ",") {
+			if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
+				ssoDoms = append(ssoDoms, d)
+			}
+		}
+		identityModule.Handler.SSO = &identity.SSO{Provider: prov, Name: *ssoName, Domains: ssoDoms}
+		log.Info("sso: on", "issuer", *ssoIssuer, "name", *ssoName, "domains", ssoDoms, "redirect", linkBase+"/api/identity/sso/callback")
+	}
 	// The key that seals stored secrets, made on first start and backed up
 	// with the database (backup.Options.KeyPath).
 	sealKeyBytes, err := seal.LoadOrCreateKey(*sealKey)

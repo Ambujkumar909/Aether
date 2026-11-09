@@ -41,6 +41,7 @@ type Handler struct {
 	loginLimit  *httpx.Limiter
 	signupLimit *httpx.Limiter
 	resetLimit  *httpx.Limiter
+	ssoLimit    *httpx.Limiter
 	apiLimit    *httpx.Limiter
 
 	// AllowSignup gates self-registration. Whether strangers may create
@@ -53,6 +54,10 @@ type Handler struct {
 	// relay is running, in which case clients fall back to direct connection
 	// only. A func rather than a value because the credential expires.
 	ICEServers func() []any
+
+	// SSO is the organisation's identity provider, when one is configured
+	// (sso.go); nil hides the button and the endpoints.
+	SSO *SSO
 }
 
 func NewHandler(svc *Service, log *slog.Logger, secure, trustProxy bool) *Handler {
@@ -69,6 +74,11 @@ func NewHandler(svc *Service, log *slog.Logger, secure, trustProxy bool) *Handle
 		// Reset emails: five an hour per source. Each account is also sent
 		// at most one a minute (ResetEvery), whoever asks.
 		resetLimit: httpx.NewLimiter(5.0/3600.0, 5),
+		// Single sign-on: one a second, bursting to sixty. Not the password
+		// limit -- there is no password to guess here, the provider does the
+		// checking -- and an office behind one address signs everybody in
+		// at nine o'clock.
+		ssoLimit: httpx.NewLimiter(1, 60),
 		// 20 a second sustained, 60 in a burst. A page opening fires a
 		// handful at once, which the burst absorbs; a script cannot sustain
 		// more than twenty without being told to wait.
@@ -83,6 +93,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.login)))
 	mux.Handle("POST /api/identity/signup",
 		httpx.RateLimit(h.signupLimit, h.limitKey, http.HandlerFunc(h.signup)))
+	mux.Handle("GET /api/identity/sso/start",
+		httpx.RateLimit(h.ssoLimit, h.limitKey, http.HandlerFunc(h.ssoStart)))
+	mux.Handle("GET /api/identity/sso/callback",
+		httpx.RateLimit(h.ssoLimit, h.limitKey, http.HandlerFunc(h.ssoCallback)))
 	mux.Handle("POST /api/identity/login/second",
 		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.secondStep)))
 	mux.Handle("POST /api/identity/two-step/setup",
@@ -204,6 +218,7 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"passwordReset":     h.svc.SendReset != nil,
 		"verifySignup":      h.svc.SendVerify != nil,
 		"twoStep":           h.svc.Sealer != nil,
+		"sso":               h.ssoConfig(),
 	}
 	// The relay's URLs and a fresh credential, when a relay is running. This
 	// is why the client fetches config on join rather than hard-coding ICE
@@ -220,6 +235,15 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpx.JSON(w, http.StatusOK, body)
+}
+
+// ssoConfig is what the sign-in screen needs to offer the provider: a name
+// for the button, nothing about the provider itself.
+func (h *Handler) ssoConfig() any {
+	if h.SSO == nil || h.svc.Sealer == nil {
+		return nil
+	}
+	return map[string]string{"name": h.SSO.Name}
 }
 
 func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {

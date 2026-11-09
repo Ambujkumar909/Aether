@@ -10,7 +10,17 @@ fails=0
 # Email on, through a real SMTP server, as in production.
 bash tools/e2e/mailpit.sh start
 MAIL=(-smtp-addr 127.0.0.1:1025 -smtp-from noreply@aether.test -smtp-user aether -smtp-password e2e
-  -smtp-ca tools/e2e/.mail/cert.pem -public-url https://localhost:9443)
+  -smtp-ca tools/e2e/.mail/cert.pem -public-url https://localhost:9443
+  -sso-issuer http://127.0.0.1:9460 -sso-client-id e2e-idp -sso-client-secret e2e-idp-secret
+  -sso-name "Example Org" -sso-domains example.test
+  -admin-email admin@ci.e2e.test -admin-password "ci-$(date +%s%N)")
+# The first administrator, as the native runner makes one: harnesses that
+# act as an administrator (recording, twostep) sign in with these.
+export AETHER_ADMIN_EMAIL=admin@ci.e2e.test AETHER_ADMIN_PASSWORD=${MAIL[-1]}
+# The organisation's identity provider, faked (tools/e2e/fakeidp.mjs).
+node tools/e2e/fakeidp.mjs 9460 >"$WORK/idp.log" 2>&1 &
+idp=$!
+trap 'kill $idp 2>/dev/null' EXIT
 for n in "$@"; do
   "$BIN" -addr :9443 -tls -secure-cookies -db "$WORK/e2e.db" -cert "$WORK/cert.pem" -key "$WORK/key.pem" \
     -web web -media-port 8811 "${MAIL[@]}" >"$WORK/srv-$n.log" 2>&1 &
