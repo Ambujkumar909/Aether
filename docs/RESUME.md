@@ -5,7 +5,7 @@
 Production plan, Phase 1 (deploy to an Ubuntu server in Docker, for the
 user's org and the public) is **complete** as of 2026-11-09: two-step
 sign-in `0b95751`, SSO `148fbe1`, sign-up guards `8dd0ab9`, capacity
-`057d739`, and the Windows installer/updates (the latest commit on main).
+`057d739`, and the Windows installer/updates `ad9fe53` (CI green).
 Gates run on the last commit: Windows `-race` suite, Linux test stage
 (`docker build --target test`), image build (`aether:dev`, version
 `2026.1109.1206` stamped from the build time, `/app/desktop/latest.json`
