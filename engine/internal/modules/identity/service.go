@@ -98,6 +98,9 @@ type Service struct {
 	SendVerify       func(email, token string)
 	SendSignupNotice func(email string)
 	notices          noticeThrottle
+	// Guard holds the operator's sign-up policy (signupguard.go); nil is
+	// no block list and no mail check.
+	Guard *SignupGuard
 
 	// Sealer protects stored secrets (two-step sign-in) with the server's
 	// key; nil turns two-step sign-in off. tickets hold sign-ins between the
@@ -560,6 +563,15 @@ func (s *Service) SignUp(ctx context.Context, email, name, password, ip, ua stri
 	if len(name) > 120 {
 		name = name[:120]
 	}
+	if s.Guard.Blocked(norm) {
+		// The same answer as a new address, and the same work, so the list
+		// cannot be read back one domain at a time.
+		HashPassword(password)
+		signupCounts.Blocked.Add(1)
+		s.record(ctx, audit.Event{Action: audit.ActionSignUpBlocked, Outcome: audit.OutcomeDenied,
+			Subject: norm, IP: ip, UserAgent: ua, Detail: "domain on the block list"})
+		return nil, ErrSignupPending
+	}
 	if s.SendVerify != nil {
 		return nil, s.verifiedSignup(ctx, norm, name, password, ip, ua)
 	}
@@ -603,6 +615,7 @@ func (s *Service) SignUp(ctx context.Context, email, name, password, ip, ua stri
 	if err := s.repo.CreateUser(ctx, u); err != nil {
 		return nil, err
 	}
+	signupCounts.Created.Add(1)
 	s.record(ctx, audit.Event{
 		Action: audit.ActionSignUp, Outcome: audit.OutcomeSuccess,
 		ActorID: u.ID, ActorEmail: u.Email, Subject: norm,

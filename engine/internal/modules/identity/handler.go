@@ -43,6 +43,10 @@ type Handler struct {
 	resetLimit  *httpx.Limiter
 	ssoLimit    *httpx.Limiter
 	apiLimit    *httpx.Limiter
+	// signupCeiling bounds sign-ups across every address (SetSignupCeiling);
+	// nil is none. The per-address limiter is not enough against many
+	// addresses at once, and every sign-up with mail on sends an email.
+	signupCeiling *globalLimiter
 
 	// AllowSignup gates self-registration. Whether strangers may create
 	// accounts on a meeting server is a deployment decision, not a default,
@@ -246,7 +250,24 @@ func (h *Handler) ssoConfig() any {
 	return map[string]string{"name": h.SSO.Name}
 }
 
+// SetSignupCeiling bounds sign-ups across every address to perMinute (0: none).
+func (h *Handler) SetSignupCeiling(perMinute int) { h.signupCeiling = newGlobalLimiter(perMinute) }
+
+// SetSignupPerAddress bounds sign-ups from one address to perHour, bursting
+// to the same. The default (3) suits the open internet; a school lab or an
+// office behind one address signing many people up needs more.
+func (h *Handler) SetSignupPerAddress(perHour int) {
+	if perHour < 1 {
+		perHour = 1
+	}
+	h.signupLimit = httpx.NewLimiter(float64(perHour)/3600.0, float64(perHour))
+}
+
 func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {
+	if !h.signupCeiling.allow() {
+		httpx.Error(w, http.StatusTooManyRequests, "rate_limited", "too many sign-ups right now; try again in a minute")
+		return
+	}
 	if !h.AllowSignup {
 		httpx.Error(w, http.StatusForbidden, "signup_closed",
 			"this server does not accept new accounts")

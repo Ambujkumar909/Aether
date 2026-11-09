@@ -159,6 +159,7 @@ func (s *Service) verifiedSignup(ctx context.Context, norm, name, password, ip, 
 		return err
 	}
 	if u, err := s.repo.UserByEmail(ctx, norm); err == nil {
+		signupCounts.Existing.Add(1)
 		if s.SendSignupNotice != nil && s.notices.allow(norm, now) {
 			s.SendSignupNotice(u.Email)
 		}
@@ -168,6 +169,14 @@ func (s *Service) verifiedSignup(ctx context.Context, norm, name, password, ip, 
 	} else if !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	// Nothing is mailed to a domain that cannot receive mail: a typo, or a
+	// made-up domain in a flood. The caller hears the same words.
+	if s.Guard != nil && s.Guard.LookupDomain != nil && !s.Guard.LookupDomain(ctx, domainOf(norm)) {
+		signupCounts.NoMail.Add(1)
+		s.record(ctx, audit.Event{Action: audit.ActionSignUpBlocked, Outcome: audit.OutcomeDenied,
+			Subject: norm, IP: ip, UserAgent: ua, Detail: "domain has no mail server"})
+		return ErrSignupPending
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return err
@@ -176,6 +185,7 @@ func (s *Service) verifiedSignup(ctx context.Context, norm, name, password, ip, 
 	if err := s.repo.SavePendingSignup(ctx, HashToken(token), norm, name, hash, now, now.Add(SignupTTL)); err != nil {
 		return err
 	}
+	signupCounts.Pending.Add(1)
 	s.SendVerify(norm, token)
 	s.record(ctx, audit.Event{Action: audit.ActionSignUp, Outcome: audit.OutcomeFailure,
 		Subject: norm, IP: ip, UserAgent: ua, Detail: "pending: verification link sent"})
@@ -224,6 +234,7 @@ func (s *Service) CompleteSignup(ctx context.Context, token, password, ip, ua st
 	if err := s.repo.ClearPendingSignups(ctx, p.email); err != nil {
 		s.log.Error("failed to clear pending sign-ups", "err", err)
 	}
+	signupCounts.Completed.Add(1)
 	s.record(ctx, audit.Event{Action: audit.ActionSignUp, Outcome: audit.OutcomeSuccess,
 		ActorID: u.ID, ActorEmail: u.Email, Subject: u.Email, IP: ip, UserAgent: ua,
 		Detail: "self-registered as member, address verified"})

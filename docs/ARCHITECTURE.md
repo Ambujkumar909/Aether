@@ -5763,3 +5763,20 @@ provider's page, a new member created and signed in where they started,
 the same account the second time, a cancelled sign-in, an unverified
 address, a disallowed domain, a callback without a start and a forged
 state: 15 checks.
+
+**Public sign-up, guarded.** Beyond the per-address limiter (3 an hour; now a setting, since a lab or office behind one address signing many people up is a real case) and the emailed
+link: a ceiling across every address (`-signup-per-minute`, 60; the
+per-address limit is nothing against many addresses at once, and every
+sign-up with mail on sends an email), a block list of domains the operator
+supplies (`-signup-block-domains`, one per line, parents cover subdomains:
+throwaway-mail services are the operator's call, not a list baked in here),
+and before any email is sent a check that the address's domain can receive
+mail at all (`-signup-check-mail`, on: an MX record, or an address when
+there is none; RFC 7505's null MX is "no"), bounded to two seconds. None of
+it changes the answer: a blocked or unmailable address hears the same words
+after the same work as a new one, so the list cannot be read back a domain
+at a time. `aether_signups_total{outcome}` counts created, pending,
+completed, existing, blocked and no_mail, so a flood is visible. Six planted
+faults each fail a test. The harnesses run with the mail check off: their
+addresses are under .test, which has no DNS, and that refusal is the check
+working.

@@ -104,6 +104,14 @@ func main() {
 	smtpPassword := flag.String("smtp-password", "", "outgoing mail password (prefer AETHER_SMTP_PASSWORD: a flag shows in the process list)")
 	smtpFrom := flag.String("smtp-from", "", "the address email comes from, e.g. noreply@example.com")
 	smtpCA := flag.String("smtp-ca", "", "a PEM certificate authority to trust for the mail server, beside the system's")
+	signupPerMinute := flag.Int("signup-per-minute", 60,
+		"public sign-up: the most sign-ups accepted per minute across every address (0: no ceiling); each one with mail on sends an email")
+	signupPerAddress := flag.Int("signup-per-address", 3,
+		"public sign-up: the most sign-ups accepted per hour from one address (a lab or office behind one address needs more)")
+	signupBlockFile := flag.String("signup-block-domains", "",
+		"public sign-up: a file of email domains to refuse silently, one per line (throwaway-mail services)")
+	signupCheckMX := flag.Bool("signup-check-mail", true,
+		"public sign-up: before sending the verification email, check the address's domain can receive mail (an MX or A record)")
 	ssoIssuer := flag.String("sso-issuer", "",
 		"single sign-on: the OpenID Connect issuer URL of the organisation's identity provider (empty: off)")
 	ssoClientID := flag.String("sso-client-id", "", "single sign-on: the client id registered at the provider")
@@ -391,6 +399,24 @@ func main() {
 	// name the way a company address book works. Empty by default; naming a
 	// public provider here is refused rather than honoured.
 	identityModule.Service.OrgDomains = settingsModule.Service.OrgDomains
+	// Public sign-up guards (identity/signupguard.go).
+	identityModule.Handler.SetSignupCeiling(*signupPerMinute)
+	identityModule.Handler.SetSignupPerAddress(*signupPerAddress)
+	{
+		var blocked map[string]bool
+		if *signupBlockFile != "" {
+			if blocked, err = identity.LoadBlockedDomains(*signupBlockFile); err != nil {
+				log.Error("signup block list", "path", *signupBlockFile, "err", err)
+				os.Exit(2)
+			}
+		}
+		g := identity.NewSignupGuard(blocked)
+		if !*signupCheckMX {
+			g.LookupDomain = nil
+		}
+		identityModule.Service.Guard = g
+		log.Info("sign-up guards", "per_minute", *signupPerMinute, "per_address_hour", *signupPerAddress, "blocked_domains", len(blocked), "mail_check", *signupCheckMX)
+	}
 	// Single sign-on through the organisation's identity provider.
 	if *ssoIssuer != "" {
 		if linkBase == "" {

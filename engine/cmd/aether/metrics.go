@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aether-rtc/aether/internal/ledger"
+	"github.com/aether-rtc/aether/internal/modules/identity"
 	"github.com/aether-rtc/aether/internal/platform/httpx"
 	"github.com/aether-rtc/aether/internal/room"
 	"github.com/aether-rtc/aether/internal/sfu"
@@ -110,6 +111,12 @@ func gatherMetrics(ctx context.Context, d metricsDeps) []family {
 	}
 	fams = append(fams, wire,
 		gauge("aether_wire_efficiency_ratio", "Useful bytes over total bytes on the wire.", snap.Efficiency()))
+
+	su := family{name: "aether_signups_total", help: "Self sign-ups by outcome (created: without verification; pending: link sent; completed: link used; existing, blocked, no_mail: refused, same answer to the caller).", typ: "counter"}
+	for _, k := range []string{"created", "pending", "completed", "existing", "blocked", "no_mail"} {
+		su.samples = append(su.samples, sample{label("outcome", k), float64(identity.SignupTotals()[k])})
+	}
+	fams = append(fams, su)
 
 	codes := httpx.ResponseCounts()
 	keys := make([]int, 0, len(codes))

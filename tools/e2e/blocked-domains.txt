@@ -1,0 +1,3 @@
+# Email domains the test servers refuse at sign-up (-signup-block-domains),
+# one per line. The deployment's own list is the operator's choice.
+throwaway.example

@@ -29,7 +29,7 @@ because job logs need a login).
    endpoints (password re-check, revoke other sessions on enable), admin
    reset for a lost phone, audit events, the console Account card and an
    auth-card "code" view; e2e with a TOTP computed in the harness.
-2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). **Next:** the remaining abuse controls for public sign-up (a global sign-up
+2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). Sign-up guards (ceiling, block list, mail check, counters): DONE 2026-11-09. **Next: the capacity test**, then the Windows installer and updates. (Was: the remaining abuse controls for public sign-up (a global sign-up
    rate, disposable-domain policy); capacity test; Windows installer and
    auto-update (exe resources done: `tools/winres.sh`, needs MinGW windres);
    the project's own LICENSE (the owner's choice -- ask).
@@ -282,7 +282,7 @@ feature, but everything seen or heard is Aether's own.
 
 - The Bash tool fails on heredocs containing some quote mixes ("unexpected EOF"): write the content with the Write tool, then `cat`/`python` it in.
 - `cd` into `C:\Program Files\WindowsApps` is denied; reading files by full path works.
-- `until(page, fn)` in meet.lib returns FALSE on timeout, it does not throw: a harness that waits for home and then calls the API sees a confusing 401 when the sign-in itself failed (a 429 from the login limiter: 5/min, burst 10 per address, shared with the second-step endpoint). Assert the outcome after a wait, as twostep.e2e.mjs signIn does, and budget sign-ins per harness.
+- `until(page, fn)` in meet.lib returns FALSE on timeout, it does not throw: a harness that waits for home and then calls the API sees a confusing 401 when the sign-in itself failed (a 429 from the login limiter: 5/min, burst 10 per address, shared with the second-step endpoint). Assert the outcome after a wait, as twostep.e2e.mjs signIn does, and budget sign-ins per harness. Sign-UP is 3/hour per address by default; the runners pass `-signup-per-address 20` (a harness that must create its own accounts because an earlier suite failed would otherwise hit it). The runners also wait for the fake identity provider to listen before starting the server: started together, the server found no provider and exited, and the whole CI browser job fell over from that one race.
 - Windows reserves random port ranges at boot (Hyper-V/WSL): `netsh interface ipv4 show excludedportrange protocol=udp`. When one overlaps the relay range, `docker run` fails to publish ("forbidden by its access permissions"), the container never appears healthy, and media never connects. `docker-run.ps1 -RelayPorts <a free range>` publishes another; this is a test-machine problem only (Linux has no such reservation).
 - The layout harness checks overflow, tap size and meeting-bar overlap only; still look at the screenshots for everything else.
 - `go test -race ./...` runs packages in parallel; the 100-person fan-out test can miss real time from CPU starvation alone. If it fails only there, run it alone (and the suite with `-p 1`) before suspecting code.

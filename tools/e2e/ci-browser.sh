@@ -13,6 +13,7 @@ MAIL=(-smtp-addr 127.0.0.1:1025 -smtp-from noreply@aether.test -smtp-user aether
   -smtp-ca tools/e2e/.mail/cert.pem -public-url https://localhost:9443
   -sso-issuer http://127.0.0.1:9460 -sso-client-id e2e-idp -sso-client-secret e2e-idp-secret
   -sso-name "Example Org" -sso-domains example.test
+  -signup-check-mail=false -signup-block-domains tools/e2e/blocked-domains.txt -signup-per-address 20
   -admin-email admin@ci.e2e.test -admin-password "ci-$(date +%s%N)")
 # The first administrator, as the native runner makes one: harnesses that
 # act as an administrator (recording, twostep) sign in with these.
@@ -21,6 +22,7 @@ export AETHER_ADMIN_EMAIL=admin@ci.e2e.test AETHER_ADMIN_PASSWORD=${MAIL[-1]}
 node tools/e2e/fakeidp.mjs 9460 >"$WORK/idp.log" 2>&1 &
 idp=$!
 trap 'kill $idp 2>/dev/null' EXIT
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:9460/keys >/dev/null && break; sleep 0.25; done
 for n in "$@"; do
   "$BIN" -addr :9443 -tls -secure-cookies -db "$WORK/e2e.db" -cert "$WORK/cert.pem" -key "$WORK/key.pem" \
     -web web -media-port 8811 "${MAIL[@]}" >"$WORK/srv-$n.log" 2>&1 &

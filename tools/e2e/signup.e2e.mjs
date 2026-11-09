@@ -116,6 +116,14 @@ try {
   const still = await post('/api/identity/login', { email: A.email, password: A.password });
   ok(still.status === 200, `and the existing account is untouched (${still.status})`);
 
+  // A domain on the operator's block list (tools/e2e/blocked-domains.txt):
+  // the same words as a new address, and no email.
+  const blockedMail = `blocked-${Date.now().toString(36)}@mail.throwaway.example`;
+  const bl = await post('/api/identity/signup', { email: blockedMail, displayName: 'B', password: pwStranger });
+  ok(bl.status === 202 && JSON.stringify(await bl.json()) === JSON.stringify(rb), `a blocked domain answers word for word like a new address (${bl.status})`);
+  await sleep(1500);
+  ok((await mails(blockedMail)).length === 0, 'and is mailed nothing');
+
   ok(log.length === 0, `no page errors (${log.join(' | ') || 'none'})`);
 } catch (e) {
   fail(e);
