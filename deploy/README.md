@@ -142,6 +142,17 @@ console's user list; that ends every session the account has, and the person
 sets it up again after signing in with the password. Secrets are stored
 sealed with /data/aether.key (see Backups).
 
+## Capacity
+
+Measured against this container on a 24-core machine that also ran the load
+(docs/ARCHITECTURE.md, "Capacity, measured on the deployment itself"): one
+container holds a 50-person meeting over WebRTC with latency around 10 ms and
+nothing stalled, and 100 people in chat and on the meeting socket. 100 people
+in one WebRTC meeting does not hold yet (talkers stall, video runs seconds
+behind). Provision about 2 GB of memory per 50 people in WebRTC meetings.
+Many meetings of up to 50 are the shape this release serves; larger
+meetings and more than one server are the next phase.
+
 ## Monitoring
 
 Prometheus metrics are served at `http://127.0.0.1:9464/metrics` on the

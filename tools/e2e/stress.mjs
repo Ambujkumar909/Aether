@@ -34,6 +34,7 @@
 // Prints a report and writes it to tools/e2e/.stress/report.json.
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { connect } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
@@ -60,11 +61,26 @@ const MEDIA_SECONDS = Number(arg('media-seconds', 10));
 const RTC = !process.argv.includes('--no-webrtc');
 const RTC_SECONDS = Number(arg('rtc-seconds', 15));
 const KEEP = process.argv.includes('--keep');
-const PORT = 8460 + Math.floor(Math.random() * 30);
+let PORT = 8460 + Math.floor(Math.random() * 30);
 const MEDIA_PORT = PORT + 100;
-const PPROF = `127.0.0.1:${PORT + 200}`;
-const HOST = '127.0.0.1';
-const BASE = `http://${HOST}:${PORT}`;
+let PPROF = `127.0.0.1:${PORT + 200}`;
+let HOST = '127.0.0.1';
+let BASE = `http://${HOST}:${PORT}`;
+// --url targets a server already running -- the production container -- so
+// the deployment's own shape is what gets measured: no build, no spawn, no
+// process sampling or profiles (the process is not ours to read); the
+// administrator comes from AETHER_ADMIN_EMAIL / AETHER_ADMIN_PASSWORD, and a
+// self-signed certificate is accepted, since the test container has one.
+const TARGET = arg('url', '');
+const TLS = TARGET.startsWith('https://');
+if (TARGET) {
+  const u = new URL(TARGET);
+  HOST = u.hostname;
+  PORT = Number(u.port || (TLS ? 443 : 80));
+  BASE = TARGET.replace(/\/$/, '');
+  PPROF = '';
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => performance.now();
 
@@ -106,21 +122,24 @@ async function end() {
 // ---------------------------------------------------------------------------
 const dir = mkdtempSync(join(tmpdir(), 'aether-stress-'));
 // --bin runs a server built elsewhere (to compare two versions).
-let exe = arg('bin', '');
-if (!exe) {
-  // One fixed path, reused run after run: the operating system sees one
-  // program, not a new one each time (each new one is a firewall prompt).
-  mkdirSync(join(here, '.stress'), { recursive: true });
-  exe = join(here, '.stress', platform() === 'win32' ? 'aether-stress.exe' : 'aether-stress');
-  console.log(`building the server: ${exe}`);
-  const built = spawnSync('go', ['build', '-o', exe, './cmd/aether'], { cwd: join(root, 'engine'), stdio: 'inherit' });
-  if (built.status !== 0) process.exit(1);
-}
-const adminEmail = 'stress-admin@example.test';
-const adminPass = 'stress-' + randomBytes(9).toString('base64url');
+const adminEmail = TARGET ? process.env.AETHER_ADMIN_EMAIL : 'stress-admin@example.test';
+const adminPass = TARGET ? process.env.AETHER_ADMIN_PASSWORD : 'stress-' + randomBytes(9).toString('base64url');
 const logLines = [];
-const server = spawn(exe, ['-addr', `${HOST}:${PORT}`, '-media-port', String(MEDIA_PORT), '-relay=false', '-trust-proxy', '-db', join(dir, 'stress.db'), '-web', join(root, 'web'), '-admin-email', adminEmail, '-admin-password', adminPass, '-pprof', PPROF], { cwd: join(root, 'engine') });
-for (const s of [server.stdout, server.stderr]) s.on('data', (d) => logLines.push(...d.toString().split('\n').filter(Boolean)));
+let server = null;
+if (!TARGET) {
+  let exe = arg('bin', '');
+  if (!exe) {
+    // One fixed path, reused run after run: the operating system sees one
+    // program, not a new one each time (each new one is a firewall prompt).
+    mkdirSync(join(here, '.stress'), { recursive: true });
+    exe = join(here, '.stress', platform() === 'win32' ? 'aether-stress.exe' : 'aether-stress');
+    console.log(`building the server: ${exe}`);
+    const built = spawnSync('go', ['build', '-o', exe, './cmd/aether'], { cwd: join(root, 'engine'), stdio: 'inherit' });
+    if (built.status !== 0) process.exit(1);
+  }
+  server = spawn(exe, ['-addr', `${HOST}:${PORT}`, '-media-port', String(MEDIA_PORT), '-relay=false', '-trust-proxy', '-db', join(dir, 'stress.db'), '-web', join(root, 'web'), '-admin-email', adminEmail, '-admin-password', adminPass, '-pprof', PPROF], { cwd: join(root, 'engine') });
+  for (const s of [server.stdout, server.stderr]) s.on('data', (d) => logLines.push(...d.toString().split('\n').filter(Boolean)));
+}
 for (let i = 0; i < 60; i++) {
   try {
     if ((await fetch(BASE + '/healthz')).ok) break;
@@ -130,6 +149,7 @@ for (let i = 0; i < 60; i++) {
 
 // The server process, sampled: CPU seconds, memory, OS handles, threads.
 async function sample() {
+  if (!server) return null;
   try {
     if (platform() === 'win32') {
       const out = execFileSync('powershell', ['-NoProfile', '-c', `Get-Process -Id ${server.pid} | Select-Object CPU,WorkingSet64,HandleCount,@{n='T';e={$_.Threads.Count}} | ConvertTo-Json`], { encoding: 'utf8' });
@@ -193,7 +213,8 @@ function ws(person, path, onFrame) {
     const conn = { dicts, rxBytes: 0, rxMessages: 0, rxFrames: 0, batches: 0, closed: false, decodeErrors: 0 };
     let buf = Buffer.alloc(0);
     let up = false;
-    const sock = connect({ host: HOST, port: PORT }, () =>
+    const dial = TLS ? (cb) => tlsConnect({ host: HOST, port: PORT, rejectUnauthorized: false, servername: HOST }, cb) : (cb) => connect({ host: HOST, port: PORT }, cb);
+    const sock = dial(() =>
       sock.write(
         `GET ${path} HTTP/1.1\r\nHost: ${HOST}:${PORT}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
           `Sec-WebSocket-Key: ${randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${BASE}\r\n` +
@@ -788,11 +809,12 @@ try {
     ok(b.status === 0, 'the load client builds');
     const rtcRoom = `stress-rtc-${tag}`;
     const spec = join(here, '.stress', 'people.json');
-    writeFileSync(spec, JSON.stringify({ base: BASE, room: rtcRoom, admin: { cookie: admin.cookie, ip: admin.ip, name: 'admin' }, people: people.map((p) => ({ cookie: p.cookie, ip: p.ip, name: `Person ${p.i}` })) }));
+    writeFileSync(spec, JSON.stringify({ base: BASE, insecure: TLS, room: rtcRoom, admin: { cookie: admin.cookie, ip: admin.ip, name: 'admin' }, people: people.map((p) => ({ cookie: p.cookie, ip: p.ip, name: `Person ${p.i}` })) }));
     const cpu0 = await sample();
     const t0r = now();
     const profiled = (async () => {
       await sleep(16000); // after joining and settling
+      if (!PPROF) return;
       try {
         const prof = await fetch(`http://${PPROF}/debug/pprof/profile?seconds=10`);
         writeFileSync(join(here, '.stress', 'webrtc-cpu.prof'), Buffer.from(await prof.arrayBuffer()));
@@ -1101,7 +1123,7 @@ try {
   const out = join(here, '.stress');
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
-  server.kill();
+  server?.kill();
   console.log(`\n${report.failures ? report.failures + ' FAILED' : 'all passed'}  (N=${N}; report in tools/e2e/.stress/report.json)`);
   if (!KEEP) setTimeout(() => process.exit(report.failures ? 1 : 0), 300);
 }

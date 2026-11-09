@@ -5780,3 +5780,44 @@ completed, existing, blocked and no_mail, so a flood is visible. Six planted
 faults each fail a test. The harnesses run with the mail check off: their
 addresses are under .test, which has no DNS, and that refusal is the check
 working.
+
+**Capacity, measured on the deployment itself.** `tools/e2e/stress.mjs
+--url https://localhost:9443` now drives a server already running -- the
+hardened production container on this 24-core machine, Docker Desktop's
+port proxy in the path, relay on -- instead of a binary it spawns, with
+distinct forwarded addresses per person (`AETHER_TRUST_PROXY=true`) and the
+sign-up ceiling raised for the burst. The load client and the container
+share the machine, so every figure is a floor, not a limit.
+
+| | 50 people | 100 people | 200 people (socket paths only) |
+|---|---|---|---|
+| concurrent sign-in (argon2id), p50 / p99 | 233 / 333 ms | 382 / 608 ms | 885 / 1,362 ms |
+| chat delivery to every socket, p50 / p99 | 8.8 / 21.2 ms (24,500 receipts) | 59.5 / 134.2 ms (99,000) | 278 / 643 ms (398,000) |
+| socket media, camera latency p50 / p99 | 16.2 / 30.8 ms | 16.3 / 28.4 ms | 16.7 / 96.6 ms |
+| socket media, audio latency p50 / p99 | 18.7 / 40.7 ms | 19.5 / 39.6 ms | 26.1 / 102.4 ms |
+| socket media, server out | -- | 109 Mbit/s | 212 Mbit/s |
+| WebRTC: joined, errors | 50, 0 (289 ms) | 100, 0 (510 ms) | not run (see 100) |
+| WebRTC: on-screen cameras stalled / talkers unheard | 0 / 0 | 0 / **297 of 297** | -- |
+| WebRTC: video latency p50 / p99 | 1.0 / 11.4 ms | 2,473 / 8,970 ms | -- |
+| WebRTC: audio latency p50 / p99 | 1.1 / 11.9 ms | 1,536 / 5,035 ms | -- |
+| WebRTC: shown camera, kbit/s each | 265 | 71 | -- |
+| goroutines during WebRTC (200: during socket media) | 624 | 22,706 | 2,423 |
+| heap during WebRTC / runtime memory held | 871 MB / 1.9 GB | 1.6 GB / -- | 191 MB (socket media) / 3.1 GB held across all three runs |
+| after everyone left | 22 goroutines, 17 MB live heap | 22 goroutines, 44 MB | 22 goroutines, 46 MB |
+| every assertion | passed | one: talkers unheard | passed |
+
+So one container holds a 50-person meeting over WebRTC with latency in the
+low milliseconds and nothing stalled, and holds 100 people on everything but
+WebRTC, and 200 on the socket paths with chat delivery under a second (the
+single SQLite writer, §6br) and sign-in at 1.4 s p99 (argon2id, the price
+of the hash). At 100 over WebRTC the §6bu wall stands: every talker's audio stalls
+and video runs seconds behind -- better than the 41-50 s of §6bu (the slot
+pool of §6bv bounds the tracks), still unusable. The 22,706 goroutines are
+pion's per-connection machinery, about 227 a person. The fix §6bu named and
+§6bv did not do, a bounded send queue per receiver so one publisher's
+dispatch never waits on the slowest receiver, is the first Phase 4 item,
+with the load client moved to another machine before trusting any number
+above 50. The after-leave heap of 1.17 GB that the 50-person run reported
+was garbage awaiting collection: minutes later the live heap was 17 MB, with
+the runtime still holding 1.9 GB from the peak, which is the memory to
+provision for 50.

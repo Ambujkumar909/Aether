@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
@@ -38,10 +39,12 @@ import (
 )
 
 type input struct {
-	Base   string   `json:"base"` // http://host:port
-	Room   string   `json:"room"`
-	People []person `json:"people"`
-	Admin  person   `json:"admin"` // for /api/telemetry: what the server thinks of a stalled feed
+	Base string `json:"base"` // http://host:port
+	// Insecure accepts a self-signed certificate (the test container).
+	Insecure bool     `json:"insecure"`
+	Room     string   `json:"room"`
+	People   []person `json:"people"`
+	Admin    person   `json:"admin"` // for /api/telemetry: what the server thinks of a stalled feed
 }
 
 type person struct {
@@ -136,7 +139,7 @@ func join(in input, idx int, p person) (*client, error) {
 	u := strings.Replace(in.Base, "http", "ws", 1) + "/rtc?room=" + in.Room + "&name=" + strings.ReplaceAll(p.Name, " ", "%20") + "&media=webrtc"
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPHeader: http.Header{
+	ws, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPClient: httpClient(in), HTTPHeader: http.Header{
 		"Cookie": {p.Cookie}, "X-Forwarded-For": {p.IP}, "Origin": {in.Base},
 	}})
 	if err != nil {
@@ -403,7 +406,7 @@ func telemetryFeeds(in input) (map[string]string, map[string]binding) {
 	req, _ := http.NewRequest("GET", in.Base+"/api/telemetry", nil)
 	req.Header.Set("Cookie", in.Admin.Cookie)
 	req.Header.Set("X-Forwarded-For", in.Admin.IP)
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpClient(in).Do(req)
 	if err != nil {
 		return out, slots
 	}
@@ -686,4 +689,13 @@ func main() {
 	if joinErrs.Load() > 0 {
 		os.Exit(2)
 	}
+}
+
+// httpClient is what dials the server: with Insecure, one that accepts the
+// test container's self-signed certificate.
+func httpClient(in input) *http.Client {
+	if !in.Insecure {
+		return http.DefaultClient
+	}
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 }

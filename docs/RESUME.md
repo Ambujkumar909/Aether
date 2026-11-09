@@ -29,7 +29,7 @@ because job logs need a login).
    endpoints (password re-check, revoke other sessions on enable), admin
    reset for a lost phone, audit events, the console Account card and an
    auth-card "code" view; e2e with a TOTP computed in the harness.
-2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). Sign-up guards (ceiling, block list, mail check, counters): DONE 2026-11-09. **Next: the capacity test**, then the Windows installer and updates. (Was: the remaining abuse controls for public sign-up (a global sign-up
+2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). Sign-up guards (ceiling, block list, mail check, counters): DONE 2026-11-09. Capacity test against the container: DONE 2026-11-09 (50 over WebRTC holds; 100 does not -- the §6bu dispatch wall; see 6by). **Next: the Windows installer and updates**, then the project's LICENSE (ask the owner). Phase 4's first item is now concrete: a bounded send queue per receiver, and the load client on another machine. (Was: the remaining abuse controls for public sign-up (a global sign-up
    rate, disposable-domain policy); capacity test; Windows installer and
    auto-update (exe resources done: `tools/winres.sh`, needs MinGW windres);
    the project's own LICENSE (the owner's choice -- ask).
