@@ -1,13 +1,21 @@
 # Resume here — Teams parity work
 
-## Start here (handoff, 2026-11-07 evening)
+## Start here (handoff, 2026-11-09 evening)
 
 Production plan, Phase 1 (deploy to an Ubuntu server in Docker, for the
-user's org and the public). Commits today: `ea217c2` (Phase 1 part 1), CI
-fixes `636de82` `c49a908` `a11109f` `608b7a0` (CI green from `608b7a0`), and
-`48cedfa` (email-verified sign-up) and the handoff commits after it. CI was
-still running at handoff (a newer push cancels the older run) -- check the
-latest run on main first:
+user's org and the public) is **complete** as of 2026-11-09: two-step
+sign-in `0b95751`, SSO `148fbe1`, sign-up guards `8dd0ab9`, capacity
+`057d739`, and the Windows installer/updates (the latest commit on main).
+Gates run on the last commit: Windows `-race` suite, Linux test stage
+(`docker build --target test`), image build (`aether:dev`, version
+`2026.1109.1206` stamped from the build time, `/app/desktop/latest.json`
+present), the opt-in live update test, and the real-supervisor swap
+(ARCHITECTURE 6by, last paragraphs). **Phase 1 leaves one decision only
+the owner can make: the LICENSE file. Ask; never pick one.** Then Phase 2
+(below, item 4) and the security phase. Earlier Phase 1 history: `ea217c2`
+(part 1), CI fixes `636de82` `c49a908` `a11109f` `608b7a0`, `48cedfa`
+(email-verified sign-up). Check the latest CI run on main first (a newer
+push cancels the older run):
 `curl -s "https://api.github.com/repos/Ambujkumar909/Aether/actions/runs?per_page=1" | grep -E '"(head_sha|status|conclusion)"'`;
 failing steps report as annotations at `.../check-runs/<id>/annotations`,
 because job logs need a login).
@@ -29,7 +37,7 @@ because job logs need a login).
    endpoints (password re-check, revoke other sessions on enable), admin
    reset for a lost phone, audit events, the console Account card and an
    auth-card "code" view; e2e with a TOTP computed in the harness.
-2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). Sign-up guards (ceiling, block list, mail check, counters): DONE 2026-11-09. Capacity test against the container: DONE 2026-11-09 (50 over WebRTC holds; 100 does not -- the §6bu dispatch wall; see 6by). **Next: the Windows installer and updates**, then the project's LICENSE (ask the owner). Phase 4's first item is now concrete: a bounded send queue per receiver, and the load client on another machine. (Was: the remaining abuse controls for public sign-up (a global sign-up
+2. SSO/OIDC: DONE 2026-11-09 (ARCHITECTURE 6by). Sign-up guards (ceiling, block list, mail check, counters): DONE 2026-11-09. Capacity test against the container: DONE 2026-11-09 (50 over WebRTC holds; 100 does not -- the §6bu dispatch wall; see 6by). Windows installer and updates: DONE 2026-11-09 (ARCHITECTURE 6by, "The Windows app installs and updates itself"; deploy/README "Windows app"). **Next: the project's LICENSE (ask the owner -- never pick one)**, then Phase 2. Optional, not done: a "Get the Windows app" link on the sign-in screen (the server would advertise `desktop: true` in `/api/identity/config` when `-desktop-dir` is set). Phase 4's first item is now concrete: a bounded send queue per receiver, and the load client on another machine. (Was: the remaining abuse controls for public sign-up (a global sign-up
    rate, disposable-domain policy); capacity test; Windows installer and
    auto-update (exe resources done: `tools/winres.sh`, needs MinGW windres);
    the project's own LICENSE (the owner's choice -- ask).

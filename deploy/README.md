@@ -142,6 +142,31 @@ console's user list; that ends every session the account has, and the person
 sets it up again after signing in with the password. Secrets are stored
 sealed with /data/aether.key (see Backups).
 
+## Windows app
+
+The image carries the Windows app and serves it at
+`https://your-server/desktop/aether-desktop.exe`. Installing it is running
+it once with `-install`:
+
+```
+aether-desktop.exe -install -server https://your-server
+```
+
+It copies itself to the user's programs folder (`%LOCALAPPDATA%\Programs\Aether`),
+adds a Start menu entry and an entry in Settings > Apps, and starts. Nothing
+is elevated and nothing is system-wide; `-uninstall` (or Settings > Apps)
+removes all of it, settings included.
+
+Updates come from the server the app is pointed at. Every image build has a
+version (`AETHER_VERSION`, or the build time when unset) and publishes it at
+`/desktop/latest.json`; the app checks shortly after it starts and every six
+hours over the same pinned TLS connection it uses for everything else, downloads
+a newer version beside itself, verifies size and SHA-256, and offers **Restart
+to update** in its notification-area menu. The swap happens at the restart.
+There is no code signing: the trust is the server's TLS identity, which the
+whole application already rests on. So `docker compose up -d --build` after a
+`git pull` also updates every installed Windows app, at its next check.
+
 ## Capacity
 
 Measured against this container on a 24-core machine that also ran the load

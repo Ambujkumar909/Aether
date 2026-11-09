@@ -102,3 +102,20 @@ func TestChildMarkerIsStrippedFromArgs(t *testing.T) {
 		}
 	}
 }
+
+// An update restart is not a crash: it restarts at once and is not counted
+// toward the crash limit, however many times it happens.
+func TestAnUpdateRestartIsNotCountedAsACrash(t *testing.T) {
+	var attempts int
+	var slept time.Duration
+	code := supervisePolicy(func(attempt int) int {
+		attempts++
+		if attempts <= maxRestarts+2 {
+			return exitUpdateRestart
+		}
+		return 0
+	}, time.Now, func(d time.Duration) { slept += d }, func(string) {})
+	if code != 0 || attempts != maxRestarts+3 || slept != 0 {
+		t.Fatalf("code %d after %d attempts, slept %s: update restarts were counted or delayed", code, attempts, slept)
+	}
+}

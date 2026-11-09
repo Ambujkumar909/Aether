@@ -27,8 +27,21 @@ ENV CGO_ENABLED=1
 RUN go vet ./... && go test ./... -race -count=1
 
 FROM source AS build
+# The version every build carries. Unset, it is the build's UTC time
+# (2026.1109.1735): dotted numbers that always grow, so a Windows app built
+# into one image sees the next image as newer. A "dev" version would never
+# update itself (cmd/aether-desktop/version.go), so no image ships one.
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/aether ./cmd/aether
+RUN V="${VERSION}"; [ "$V" = dev ] && V="$(date -u +%Y.%m%d.%H%M)"; mkdir -p /out && echo "$V" > /out/version \
+    && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$V" -o /out/aether ./cmd/aether
+# The Windows app, cross-compiled, with the manifest the app updates from
+# (cmd/aether-desktop/update.go); served by the server at /desktop/.
+RUN V="$(cat /out/version)" && mkdir -p /out/desktop \
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+       -ldflags "-s -w -H windowsgui -X main.version=$V" -o /out/desktop/aether-desktop.exe ./cmd/aether-desktop \
+    && cd /out/desktop \
+    && printf '{"version":"%s","file":"aether-desktop.exe","sha256":"%s","size":%s}\n' \
+       "$V" "$(sha256sum aether-desktop.exe | cut -d' ' -f1)" "$(stat -c %s aether-desktop.exe)" > latest.json
 # The web client without what only development uses: node_modules, the unit
 # tests and the package file.
 COPY web/ /out/web/
@@ -39,6 +52,7 @@ RUN rm -rf /out/web/node_modules /out/web/package.json /out/web/package-lock.jso
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 COPY --from=build /out/aether /app/aether
 COPY --from=build /out/web /app/web
+COPY --from=build /out/desktop /app/desktop
 COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 COPY --from=build --chown=65532:65532 /out/data /data
 WORKDIR /app
@@ -60,7 +74,8 @@ ENV AETHER_ADDR=:8443 \
     AETHER_MEDIA_PORT=8801 \
     AETHER_RELAY_PORTS=49160-49359 \
     AETHER_RELAY_ALT_TCP=0 \
-    AETHER_METRICS_ADDR=:9464
+    AETHER_METRICS_ADDR=:9464 \
+    AETHER_DESKTOP_DIR=/app/desktop
 
 VOLUME ["/data"]
 EXPOSE 8443/tcp 8080/tcp 8801/tcp 8801/udp 3478/tcp 3478/udp 49160-49359/udp

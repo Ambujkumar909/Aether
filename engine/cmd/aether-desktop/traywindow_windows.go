@@ -65,6 +65,7 @@ const (
 	menuServer  = 3
 	menuOnTop   = 4
 	menuPerms   = 6
+	menuUpdate  = 7
 	menuQuit    = 5
 
 	mfChecked = 0x00000008
@@ -107,6 +108,8 @@ type MenuState struct {
 	Server       string
 	StartAtLogin bool
 	AlwaysOnTop  bool
+	// Update is the version downloaded and ready, or empty.
+	Update string
 }
 
 type TrayWindow struct {
@@ -244,6 +247,9 @@ func (t *TrayWindow) showMenu() {
 	}
 	add(check(st.AlwaysOnTop), menuOnTop, "Keep window on top")
 	add(check(st.StartAtLogin), menuStartup, "Start with Windows")
+	if st.Update != "" {
+		add(mfString, menuUpdate, "Restart to update to "+st.Update)
+	}
 	add(mfString, menuPerms, "Permissions...")
 	add(mfSeparator, 0, "")
 	add(mfString, menuQuit, "Quit "+appName)

@@ -5821,3 +5821,44 @@ above 50. The after-leave heap of 1.17 GB that the 50-person run reported
 was garbage awaiting collection: minutes later the live heap was 17 MB, with
 the runtime still holding 1.9 GB from the peak, which is the memory to
 provision for 50.
+
+**The Windows app installs and updates itself.** The executable is its own
+setup (`cmd/aether-desktop/install_windows.go`): `-install` copies it to
+`%LOCALAPPDATA%\Programs\Aether`, writes the Settings > Apps entry under
+HKCU, makes the Start menu shortcut through IShellLinkW/IPersistFile driven
+directly (a typed vtable, no COM library), and starts the installed copy;
+`-uninstall` undoes all of it, the program folder last, from a shell that
+waits for the process to end. Nothing is elevated. Updates
+(`update.go`, `update_windows.go`): the image cross-compiles the app and
+writes `/desktop/latest.json` (version, file, SHA-256, size), the server
+serves both from `-desktop-dir` as attachments with `nosniff` (a traversal
+and a missing file both answer 404; `desktop_test.go`), and the app asks 45 s
+after start and then every six hours over a client that trusts exactly what
+the window trusts -- a chain that validates for the host, or the one pinned
+key. A newer version is downloaded beside the program as `.new` through a
+hash, kept only when size and hash match, and the tray offers "Restart to
+update": the child exits with code 3, which the supervisor treats as a
+restart rather than a crash (not counted toward the crash limit, no delay),
+swaps `.exe` to `.old` and `.new` to `.exe` before the next start, and undoes
+the swap if the second rename fails. A `.new` that is not a program (no MZ
+header) is deleted. A `dev` build never updates, which is why the image
+stamps its build time as the version when none is given: `2026.1109.1735`
+sorts numerically after every earlier build.
+
+Measured on this machine against a server started with `-desktop-dir`
+publishing a 1.0.1 build: the live test
+(`TestLiveTheUpdateIsFetchedOverThePinnedConnectionOnly`, opt-in through
+`AETHER_UPDATE_SERVER`) fetched the manifest and the 8,048,128-byte program
+over the pinned connection with the hash matching, and the same client with
+no pin or a wrong pin was refused by the self-signed server. The swap ran
+through the real supervisor: a 1.0.0 program with the 1.0.1 file beside it as
+`.new` started as 1.0.1 (SHA-256 `38fb21c0...`, the manifest's), logging "a
+downloaded update was put in place"; `.old` stayed behind on that launch
+because the supervisor that applied the swap was still running from that
+image, and the launch after removed it. What could not be run here: the
+45-second check inside the live app, because WebView2 cannot open a window in
+this remote session (the child exits at start). Seven faults planted into the
+updater -- hash not checked, size not checked, a non-program applied, a failed
+swap not undone, a dev build updating, a path accepted in the file name, the
+update exit counted as a crash -- each fail exactly the test written for them.
+

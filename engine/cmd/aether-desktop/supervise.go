@@ -55,6 +55,12 @@ func supervisePolicy(fn func(attempt int) int, now func() time.Time, sleep func(
 	var crashes []time.Time
 	for attempt := 1; ; attempt++ {
 		code := fn(attempt)
+		if code == exitUpdateRestart {
+			// The child downloaded a newer version and asked to be replaced;
+			// the next start swaps it in. Not a crash, not counted as one.
+			note("restarting to apply an update")
+			continue
+		}
 		if code == 0 || !restartable(code) {
 			return code
 		}
@@ -115,6 +121,13 @@ func supervise(dir string, args []string) int {
 		return 1
 	}
 	return supervisePolicy(func(attempt int) int {
+		// A newer version the child downloaded is swapped in here, where no
+		// copy of it is running (update.go).
+		if applied, err := applyPendingUpdate(exe); applied {
+			note("a downloaded update was put in place")
+		} else if err != nil {
+			note("pending update: " + err.Error())
+		}
 		note(fmt.Sprintf("starting %s (attempt %d)", filepath.Base(exe), attempt))
 		cmd := exec.Command(exe, append(append([]string{}, args...), childFlag)...)
 		cmd.Stdout = out

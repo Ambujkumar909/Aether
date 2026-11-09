@@ -41,6 +41,11 @@ func main() {
 	// what makes a window look like a remote desktop session.
 	dpiOK := declareDPIAware()
 
+	// -install / -uninstall are the setup program (install_windows.go).
+	if handled, code := installCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	// Two roles in one executable (see supervise.go): the parent supervises,
 	// the child -- marked with -child -- is the application. The parent
 	// needs only the settings directory, for the log.
@@ -122,6 +127,7 @@ It is remembered after that.
 	// the source -- and every report about "the app" could have been about
 	// either. The path and its build time make the log unambiguous.
 	exe, _ := os.Executable()
+	cleanOldUpdate(exe) // the version this one replaced, if any
 	built := ""
 	if st, err := os.Stat(exe); err == nil {
 		built = st.ModTime().Format("2006-01-02 15:04:05")

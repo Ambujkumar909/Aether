@@ -31,6 +31,10 @@ type Agent struct {
 	// tray is the notification-area icon, once it exists; the attention
 	// bindings reach it through here.
 	tray *Tray
+
+	// updateReady is the version downloaded beside the program and waiting
+	// for a restart (update.go); set by watchUpdates, shown in the menu.
+	updateReady string
 }
 
 func NewAgent(cfg Config, dir string, log *slog.Logger) *Agent {
@@ -68,6 +72,8 @@ func (a *Agent) RunWindow(ctx context.Context) error {
 	}
 	// Always set: the shell flags (shell_windows.go) ride along with the pin.
 	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", BrowserArgs(pin))
+	// Newer versions, from this server, over the same trust.
+	go a.watchUpdates(ctx, pin)
 
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
@@ -265,10 +271,14 @@ func (a *Agent) RunWindow(ctx context.Context) error {
 		// nobody can reach it.
 		tw, err := NewTrayWindow(a.ShowWindow, a.Quit,
 			func() MenuState {
+				a.mu.Lock()
+				ready := a.updateReady
+				a.mu.Unlock()
 				return MenuState{
 					Server:       hostOf(a.cfg.Server),
 					StartAtLogin: StartsAtLogin(),
 					AlwaysOnTop:  a.onTop,
+					Update:       ready,
 				}
 			},
 			func(id uintptr) { a.menuAction(id, hwnd) },
@@ -361,6 +371,11 @@ func (a *Agent) ShowWindow() {
 // wrong.
 func (a *Agent) menuAction(id, hwnd uintptr) {
 	switch id {
+	case menuUpdate:
+		// The supervisor swaps the downloaded program in and starts it
+		// again (supervise.go); this process only has to end saying so.
+		a.log.Info("restarting to update", "to", a.updateReady)
+		os.Exit(exitUpdateRestart)
 	case menuStartup:
 		want := !StartsAtLogin()
 		if err := SetStartAtLogin(want); err != nil {

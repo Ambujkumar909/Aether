@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      - run: docker build --build-arg VERSION=${{ github.sha }} -t aether:dev .
+      - run: docker build -t aether:dev .
       - name: automatic certificates against Pebble
         run: bash tools/e2e/acme.e2e.sh aether:dev
 

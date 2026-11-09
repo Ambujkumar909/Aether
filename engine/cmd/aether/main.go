@@ -119,6 +119,8 @@ func main() {
 	ssoName := flag.String("sso-name", "your organisation", "single sign-on: the name on the sign-in button")
 	ssoDomains := flag.String("sso-domains", "",
 		"single sign-on: comma-separated email domains allowed to sign in this way (default: the organisation's domains setting)")
+	desktopDir := flag.String("desktop-dir", "",
+		"serve the Windows app and its update manifest from this directory at /desktop/ (the image sets it; empty: off)")
 	sealKey := flag.String("seal-key", "",
 		"file holding the key that seals stored secrets (two-step sign-in); made on first start (default: aether.key beside the database)")
 	metricsAddr := flag.String("metrics-addr", "",
@@ -638,6 +640,10 @@ func main() {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	if *desktopDir != "" {
+		mux.Handle("GET /desktop/{file}", desktopHandler(*desktopDir))
+		log.Info("desktop app served", "dir", *desktopDir)
+	}
 	mux.Handle("/", noCache(http.FileServer(http.Dir(*webDir))))
 
 	// Gzip innermost, so the access log counts the bytes that went on the
