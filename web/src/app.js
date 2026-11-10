@@ -68,7 +68,8 @@ import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, lo
 import { quantize as togQuantize, encodeMask as togEncode, MASK_W as TOG_W, MASK_H as TOG_H, MAX_MASK_BYTES as TOG_MAX, encodeSet as encodeTogSet, encodeOutline as encodeTogOutline, decodeTogether, seats as togSeats, SCENES as TOG_SCENES, PORTRAIT as TOG_PORTRAIT } from './together.js';
 import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as recBanner, elapsed as recElapsed, pickMime, ChunkSink, fileName as recFileName, WHAT as REC } from './recording.js';
 import { WSMediaSender, WSMediaReceiver, wsMediaSupported } from './wsmedia.js';
-import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence } from './chat.js';
+import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence, cue } from './chat.js';
+import { ringLoop, shouldPlay, soundLevel } from './sounds.js';
 import { presenceIcon } from './presence.js';
 import { acquireMic } from './echo.js';
 import { Denoiser, denoiseWanted, setDenoiseWanted, denoiseSupported } from './denoise.js';
@@ -555,6 +556,7 @@ function handle(h, r) {
           state.chatToAuto = false;
         }
         state.people.delete(e.id);
+        if (e.id !== state.me && leaverName) cue('leave');
         renderChatTo();
         // Their fallback decoder, if they were arriving over the WebSocket.
         dropWSMediaFor(e.id);
@@ -583,6 +585,9 @@ function handle(h, r) {
         });
         renderChatTo();
         ensureMeetingChat();
+        // An arrival after the first few seconds is somebody joining; the
+        // roster that greets us on the way in is not announced one by one.
+        if (e.id !== state.me && state.joinedAt && Date.now() - state.joinedAt > 3000) cue('join');
         // Somebody new can only decode from a keyframe. Force one now rather
         // than making them wait out the 2 s cadence.
         state.wsSender?.keyframe();
@@ -617,7 +622,10 @@ function handle(h, r) {
           dropWSScreenFor(p.id);
           if (state.pinned === screenIdFor(p.id)) state.pinned = null;
         }
-        if (s.handRaised && !p.state?.handRaised) state.handOrder.set(p.id, ++state.handSeq);
+        if (s.handRaised && !p.state?.handRaised) {
+          state.handOrder.set(p.id, ++state.handSeq);
+          if (p.id !== state.me) cue('hand');
+        }
         if (!s.handRaised) state.handOrder.delete(p.id);
         p.state = s;
         renderStage();
@@ -2111,6 +2119,8 @@ function sendRole(id, role) {
 // a host removes you ("removed").
 function meetingEnded(status = 'ended') {
   state.ended = true;
+  stopRingback();
+  cue('ended');
   stopLocalRecording();
   state.recogniser?.stop();
   state.recogniser = null;
@@ -4864,44 +4874,31 @@ let ringTone = null;
 let ringTimer = null;
 let outgoingRing = null; // { targetId, targetName, room }
 
+// The incoming ring: Aether's own motif (sounds.js), repeating until
+// answered or missed. Do not disturb keeps it silent; quiet hours do not,
+// a call is about you.
 function startRingTone() {
-  try {
-    const ctx = new AudioContext();
-    const gain = ctx.createGain();
-    gain.gain.value = 0.0001;
-    gain.connect(ctx.destination);
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = 440;
-    osc.connect(gain);
-    osc.start();
-    // A classic ring cadence: 1 s on, 2 s off.
-    const tick = () => {
-      const t = ctx.currentTime;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.25, t + 0.05);
-      gain.gain.setValueAtTime(0.25, t + 1.0);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.05);
-    };
-    tick();
-    const iv = setInterval(tick, 3000);
-    ringTone = { ctx, osc, iv };
-    ctx.resume().catch(() => {});
-  } catch {
-    ringTone = null;
-  }
+  stopRingTone();
+  if (!shouldPlay('ring', { level: soundLevel(), dnd: isDND(), quiet: inQuietHours() })) return;
+  ringTone = ringLoop('ring');
 }
 
 function stopRingTone() {
-  if (!ringTone) return;
-  clearInterval(ringTone.iv);
-  try {
-    ringTone.osc.stop();
-  } catch {
-    /* already stopped */
-  }
-  ringTone.ctx.close().catch(() => {});
+  ringTone?.stop();
   ringTone = null;
+}
+
+// The outgoing one, heard by the caller while the other end rings.
+let outgoingTone = null;
+function startRingback() {
+  stopRingback();
+  if (!shouldPlay('ringback', { level: soundLevel(), dnd: isDND(), quiet: inQuietHours() })) return;
+  outgoingTone = ringLoop('ringback');
+}
+
+function stopRingback() {
+  outgoingTone?.stop();
+  outgoingTone = null;
 }
 
 function closeCallDialog() {
@@ -4928,6 +4925,7 @@ async function placeCall(targetId, targetName, audioOnly = false) {
   }
   outgoingRing = { targetId, targetName, room };
   state.callRoom = room;
+  startRingback();
   try {
     sessionStorage.setItem('aether.callWith.' + room, targetId);
   } catch {}
@@ -5039,7 +5037,11 @@ function wireCalling() {
     const { calleeName, room, accepted } = e.detail;
     if (outgoingRing?.room !== room) return;
     clearTimeout(ringTimer);
-    if (!accepted) toast(`${calleeName} declined the call.`);
+    stopRingback();
+    if (!accepted) {
+      toast(`${calleeName} declined the call.`);
+      cue('declined');
+    }
     outgoingRing = null;
   });
 }

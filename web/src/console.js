@@ -6,6 +6,7 @@
 
 import { session, users, audit, settings, twoStep, api, ROLES, ApiError } from './api.js';
 import { pushNoticeState, setPushOff } from './push.js';
+import { LEVELS, soundLevel, setSoundLevel, play as playSound } from './sounds.js';
 
 const esc = (s) =>
   String(s ?? '').replace(
@@ -574,6 +575,17 @@ async function renderAccount() {
                 <pre class="ts-codes mono" id="ts-codes-list"></pre>
               </div>`}
        </div>` : ''}
+       <div class="card" id="sounds-card">
+         <h3>Sounds</h3>
+         <p class="hint">Aether's own sounds: a ring, a chime for a message, a longer one when you are named, a step when somebody joins or leaves, a note for a raised hand. Do not disturb silences all but your own calls; quiet hours let through what is about you.</p>
+         <label class="field"><span>Play</span>
+           <select id="sounds-level" class="input">
+             <option value="all">Everything</option>
+             <option value="important">Calls, mentions and messages to you</option>
+             <option value="calls">Calls only</option>
+           </select></label>
+         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" id="sounds-try" type="button">Hear the message chime</button><button class="btn" id="sounds-try-ring" type="button">Hear the ring</button></div>
+       </div>
        <div class="card" id="push-card">
          <h3>Notifications when Aether is closed</h3>
          <p class="hint" id="push-hint">Checking this browser…</p>
@@ -635,6 +647,15 @@ async function renderAccount() {
       fail(e);
     }
   });
+
+  // Sounds: the level is this browser's, remembered; the buttons play once.
+  const lvl = document.getElementById('sounds-level');
+  if (lvl) {
+    lvl.value = soundLevel();
+    lvl.onchange = () => setSoundLevel(LEVELS.includes(lvl.value) ? lvl.value : 'all');
+    document.getElementById('sounds-try').onclick = () => playSound('message');
+    document.getElementById('sounds-try-ring').onclick = () => playSound('ring');
+  }
 
   // Push notices for this browser: what the browser says, and a switch.
   const paintPush = async () => {

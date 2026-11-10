@@ -51,9 +51,10 @@ because job logs need a login).
    34 checks; layout harness covers the week grid and the schedule dialog).
    Web push and a service worker: DONE 2026-11-10 (ARCHITECTURE 6bz, "Being
    told while Aether is closed"; `tools/e2e/push.e2e.mjs`, 31 checks, with
-   `tools/e2e/fakepush.mjs` started by both runners). **Next in Phase 2:
-   Aether's own sound set**, then meeting recap, keyboard shortcuts, out of
-   office and notification settings, server-side speaker selection, data
+   `tools/e2e/fakepush.mjs` started by both runners). Aether's own sound set:
+   DONE 2026-11-10 (`web/src/sounds.js`, `tools/e2e/sounds.e2e.mjs`, 25
+   checks). **Next in Phase 2: meeting recap**, then keyboard shortcuts, out
+   of office and notification settings, server-side speaker selection, data
    export and deletion. Owner's rule (2026-11-10): never enable any monetary
    subscription, billing or paid-plan feature; browser push subscriptions
    are not that and are wanted. Then the security phase (threat model, pentest), Phase 4.

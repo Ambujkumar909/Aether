@@ -16,6 +16,7 @@ import { rankPeople, mergePeople, highlight, createSearch } from './peoplesearch
 import { presenceIcon, presenceLine, agoText, statusLabel as presenceLabel, isAutoStatus as presenceIsAuto } from './presence.js';
 import { createIdleWatch } from './idle.js';
 import { createTypingBoard, createTypingSender } from './typing.js';
+import { shouldPlay, play as playSound, soundLevel } from './sounds.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -3103,6 +3104,14 @@ export async function openConversationAt(convId, msgId) {
 // message from somebody else when the tab is hidden or the thread is not the
 // one on screen; urgent ones insist. Permission is asked for once, when you
 // first send something, which is the moment a person has decided to use this.
+// cue plays one of Aether's sounds (sounds.js) if the person's level, do
+// not disturb and quiet hours allow it. Every sound in the client goes
+// through here, so the policy is in one place.
+export function cue(kind, opts = {}) {
+  if (!shouldPlay(kind, { level: soundLevel(), dnd: isDND(), quiet: inQuietHours(), ...opts })) return false;
+  return playSound(kind);
+}
+
 export function maybeNotify(m, conv) {
   if (m.system || m.senderId === session.user?.id) return;
   // Do not disturb means exactly that; an urgent message is the one thing
@@ -3121,6 +3130,9 @@ export function maybeNotify(m, conv) {
   const looking = !document.hidden && document.hasFocus() && state.active?.id === m.conversationId && state.threadTab === 'chat';
   if (looking) return;
   if (conv?.muted && m.priority !== 'urgent' && !personal) return;
+  // Heard before it is seen: the chime for a message, the longer one for
+  // a message about you.
+  cue(personal || m.priority === 'urgent' ? 'mention' : 'message', { about: personal || conv?.kind === 'direct', urgent: m.priority === 'urgent' });
   const where = conv && conv.kind !== 'direct' ? conv.display : '';
   const title = mentioned
     ? `${m.senderName} mentioned you${where ? ' in ' + where : ''}`

@@ -6003,4 +6003,33 @@ above the composer are drawn only when the other person wrote last, which
 the push harness arranges, and they were 31px tall on a phone. Now 44px
 under a coarse pointer. A screen's controls depend on its data; the audit
 runs after the harnesses that make the data.
+**Aether's own sounds.** The ring was one 440 Hz sine. Now there is a set,
+and it is one instrument: a sine with a quiet triangle an octave above,
+a 12 ms attack and an exponential tail, on the A major pentatonic, which
+has no semitone clashes so any two of its notes sound right together
+(`web/src/sounds.js`). Nine cues, each a score of one to three notes:
+the incoming ring (three rising notes, repeating every 3.2 s), the outgoing
+ringback (one low tone, every 3 s, unmistakably not the ring), a message
+(two notes up), a mention or an urgent message (three up), somebody
+joining (a step up) and leaving (the same step down), a hand raised (one
+clear note), a call ended and a call declined (two down, one high, one low).
+Nothing is sampled and nothing is downloaded; Web Audio renders the score
+when it plays. What plays is one pure function, `shouldPlay`: do not
+disturb silences everything but your own call's progress and an urgent
+message, quiet hours let through what is about you and the calls, and a
+level the person chooses per browser (everything; calls, mentions and
+messages to you; calls only) narrows it further. Every sound in the client
+goes through `cue` in chat.js, so there is one place that decides. The
+roster that greets a newcomer is not announced one join at a time: a join
+sounds only after the first three seconds in a meeting.
+
+**Measured** in a real browser with no speaker (`sounds.e2e.mjs`, 25
+checks, rendering each cue offline): peaks from 0.16 (leave) to 0.39 (ring)
+of full scale, so none clips and the quiet ones are quiet; every cue falls
+below hearing within its written length (the ring's 1.4 s score is silent
+at 1.01 s, the message's 0.6 s at 0.38 s). The unit test holds the scores to
+the motif: every pitch is on the pentatonic, every cue is distinct, gains
+are at most 0.5, and only the ring and the ringback repeat. The call
+harness (25 checks) still places, answers and ends a call with the new
+ring in the path.
 
