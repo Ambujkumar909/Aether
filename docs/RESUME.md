@@ -53,9 +53,10 @@ because job logs need a login).
    told while Aether is closed"; `tools/e2e/push.e2e.mjs`, 31 checks, with
    `tools/e2e/fakepush.mjs` started by both runners). Aether's own sound set:
    DONE 2026-11-10 (`web/src/sounds.js`, `tools/e2e/sounds.e2e.mjs`, 25
-   checks). **Next in Phase 2: meeting recap**, then keyboard shortcuts, out
-   of office and notification settings, server-side speaker selection, data
-   export and deletion. Owner's rule (2026-11-10): never enable any monetary
+   checks). Meeting recap: DONE 2026-11-10 (`scheduling/recap.go`,
+   `tools/e2e/recap.e2e.mjs`). **Next in Phase 2: keyboard shortcuts**, then
+   out of office and notification settings, server-side speaker selection,
+   data export and deletion. Owner's rule (2026-11-10): never enable any monetary
    subscription, billing or paid-plan feature; browser push subscriptions
    are not that and are wanted. Then the security phase (threat model, pentest), Phase 4.
 

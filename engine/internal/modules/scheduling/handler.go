@@ -48,6 +48,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// The caller's own recent meetings -- the ones they were actually in.
 	mux.Handle("GET /api/scheduling/history", p(h.history))
 	mux.Handle("GET /api/scheduling/rooms/{room}/attendance", p(h.attendance))
+	// The recap is for everyone who was there, guests included, so it is
+	// gated on joining rather than hosting.
+	mux.Handle("GET /api/scheduling/rooms/{room}/recap", h.guard.Protect("meeting.join", http.HandlerFunc(h.recap)))
 	// Q&A in the meeting in progress.
 	mux.Handle("GET /api/scheduling/rooms/{room}/qna", p(h.qnaList))
 	mux.Handle("POST /api/scheduling/rooms/{room}/qna", p(h.qnaAsk))
@@ -91,6 +94,16 @@ func (h *Handler) attendance(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// recap is the page a meeting leaves behind (recap.go).
+func (h *Handler) recap(w http.ResponseWriter, r *http.Request) {
+	rc, err := h.svc.Recap(r.Context(), h.actor(r), r.PathValue("room"), time.Now().UTC())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, rc)
 }
 
 // transcript is the transcript panel's list, or the download (format=vtt or

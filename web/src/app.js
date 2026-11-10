@@ -5550,6 +5550,11 @@ function showLobby(status, message) {
   cover.classList.remove('hidden');
   spin.classList.toggle('done', status !== 'waiting');
   $('lobby-leave').textContent = status === 'ended' || status === 'removed' ? 'Back to home' : 'Leave';
+  const recapBtn = $('lobby-recap');
+  if (recapBtn) {
+    recapBtn.classList.toggle('hidden', status !== 'ended');
+    recapBtn.onclick = () => openRecap(state.room);
+  }
   switch (status) {
     case 'waiting':
       head.textContent = 'Asking to be let in…';
@@ -6585,6 +6590,7 @@ function paintHome() {
       </div>
       <span class="tag tag-member">${a.left ? esc(dur(a.seconds)) : 'in progress'}</span>
       <span class="hrow-when">${esc(dayLabel(a.joined))}, ${esc(clockHM(a.joined))}</span>
+      <button type="button" class="btn sm hrow-recap" data-recap="${esc(a.room)}" title="What the meeting left behind">Recap</button>
     </div>`
   );
   const scheduledRows = past
@@ -6606,15 +6612,20 @@ function paintHome() {
   $('hist').innerHTML = rows.length
     ? rows.join('')
     : emptyState('i-home', 'No history yet', 'Meetings you have been in will be listed here.');
-  // One click rejoins a room you were in.
+  // One click rejoins a room you were in; the Recap button opens what it
+  // left behind instead.
   $('hist')
     .querySelectorAll('[data-rejoin]')
     .forEach((el) => {
       el.style.cursor = 'pointer';
-      el.onclick = () => {
+      el.onclick = (e) => {
+        if (e.target.closest('[data-recap]')) return;
         location.href = '/?room=' + encodeURIComponent(el.dataset.rejoin);
       };
     });
+  $('hist')
+    .querySelectorAll('[data-recap]')
+    .forEach((b) => (b.onclick = () => openRecap(b.dataset.recap)));
 
   const scheduleBtn = document.querySelector('[data-empty-action]');
   if (scheduleBtn) scheduleBtn.onclick = scheduleDialog;
@@ -7202,6 +7213,7 @@ function meetingDetail(m) {
         ${mine ? `<button type="button" class="btn btn-quiet md-danger" data-cancel-all>${m.recurrence ? 'Cancel series' : 'Cancel meeting'}</button>` : ''}
         <span class="spacer"></span>
         <button type="button" class="btn" data-close>Close</button>
+        ${m.end.getTime() < Date.now() && !m.live ? '<button type="button" class="btn" data-recap>Recap</button>' : ''}
         <button type="button" class="btn btn-primary" data-join>Join</button>
       </div>
     </div>`;
@@ -7218,6 +7230,13 @@ function meetingDetail(m) {
     close();
     joinMeeting(m.room, m.title);
   };
+  const recapBtn = host.querySelector('[data-recap]');
+  if (recapBtn) {
+    recapBtn.onclick = () => {
+      close();
+      openRecap(m.room);
+    };
+  }
   const refresh = async () => {
     await loadMeetings();
     renderHome();
@@ -7868,6 +7887,105 @@ function joinDialog() {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The recap: what a meeting left behind
+// ---------------------------------------------------------------------------
+//
+// One sheet: who was there and for how long, the notes, the transcript,
+// and the downloads the meeting already offers. Read from the server when
+// opened, never kept: what is shown is what is stored.
+
+async function openRecap(room) {
+  const host = $('dialog');
+  if (!host || !room) return;
+  host.dataset.takeover = '1';
+  host.innerHTML = `<div class="dialog-card recap" role="dialog" aria-modal="true" aria-labelledby="rc-title"><h2 id="rc-title">Recap</h2><p class="hint">Loading…</p></div>`;
+  host.classList.remove('hidden');
+  const close = () => {
+    host.classList.add('hidden');
+    host.innerHTML = '';
+    delete host.dataset.takeover;
+  };
+  host.onclick = (e) => {
+    if (e.target === host) close();
+  };
+  let r;
+  try {
+    r = await scheduling.recap(room);
+  } catch (e) {
+    host.innerHTML = `<div class="dialog-card recap" role="dialog" aria-labelledby="rc-title"><h2 id="rc-title">Recap</h2>
+      <p class="hint">${esc(e instanceof ApiError && e.status === 403 ? 'This recap is for the people who were in the meeting, or were invited to it.' : 'Could not load the recap.')}</p>
+      <div class="dialog-actions"><span class="spacer"></span><button type="button" class="btn" data-close>Close</button></div></div>`;
+    host.querySelector('[data-close]').onclick = close;
+    return;
+  }
+  const dur = (s) => (s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+  const started = r.startedAt ? new Date(r.startedAt) : null;
+  const when = started
+    ? `${started.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · ${clockHM(started)}${r.endedAt ? ' – ' + clockHM(new Date(r.endedAt)) : ''}`
+    : 'Nobody has joined yet';
+  const people = (r.people ?? [])
+    .map(
+      (p) => `<li class="rc-person"><span ${avatarAttrs({ name: p.name, userId: p.userId }, 'sm')}>${esc(initials({ name: p.name }))}</span>
+        <span class="rc-name">${esc(p.name || 'Guest')}</span>
+        <span class="rc-time">${p.present ? 'still here' : esc(dur(p.seconds))}</span></li>`
+    )
+    .join('');
+  const section = (title, items) =>
+    items.length
+      ? `<h3>${esc(title)}</h3><ul class="rc-notes">${items
+          .map((n) => `<li class="${n.done ? 'done' : ''}">${esc(n.body)}${n.assignee ? ` <small>· ${esc(n.assignee)}</small>` : ''}</li>`)
+          .join('')}</ul>`
+      : '';
+  const notes = r.hasNotes
+    ? section('Agenda', r.notes.filter((n) => n.section === 'agenda')) + section('Notes', r.notes.filter((n) => n.section === 'notes')) + section('Follow-up tasks', r.notes.filter((n) => n.section === 'tasks'))
+    : '<p class="hint">No meeting notes were made.</p>';
+  const lines = (r.transcript ?? []).length
+    ? `<ol class="rc-lines">${r.transcript
+        .map((l) => `<li><b>${esc(l.name)}</b> <time>${esc(clockHM(new Date(l.at)))}</time><span>${esc(l.text)}</span></li>`)
+        .join('')}</ol>
+       <p class="rc-dl"><a class="btn sm" href="/api/scheduling/rooms/${encodeURIComponent(room)}/transcript?format=txt${r.transcriptSession ? '&session=' + r.transcriptSession : ''}">Download the transcript</a></p>`
+    : '<p class="hint">No transcript: captions were not on.</p>';
+  host.innerHTML = `
+    <div class="dialog-card recap" role="dialog" aria-modal="true" aria-labelledby="rc-title">
+      <div class="rc-head">
+        <div>
+          <p class="home-hello">${r.live ? 'Happening now' : 'Recap'}</p>
+          <h2 id="rc-title">${esc(r.title)}</h2>
+          <p class="rc-when">${esc(when)}${r.seconds ? ` · ${esc(dur(r.seconds))}` : ''}</p>
+        </div>
+        <button type="button" class="btn" data-close>Close</button>
+      </div>
+      <div class="rc-grid">
+        <section>
+          <h3>Who was there <small>${(r.people ?? []).length}</small></h3>
+          ${people ? `<ul class="rc-people">${people}</ul>` : '<p class="hint">Nobody yet.</p>'}
+          <p class="rc-dl"><a class="btn sm" href="/api/scheduling/rooms/${encodeURIComponent(room)}/attendance">Download the attendance list</a></p>
+        </section>
+        <section>${notes}</section>
+        <section class="rc-transcript"><h3>Transcript</h3>${lines}</section>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-chat>Open the meeting chat</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-primary" data-rejoin>${r.live ? 'Join' : 'Rejoin the room'}</button>
+      </div>
+    </div>`;
+  host.querySelector('[data-close]').onclick = close;
+  host.querySelector('[data-rejoin]').onclick = () => {
+    location.href = '/?room=' + encodeURIComponent(room);
+  };
+  host.querySelector('[data-chat]').onclick = async () => {
+    try {
+      const c = await messaging.meetingChat(room);
+      close();
+      await openConversationAt(c.id, '');
+    } catch (e) {
+      toast(e instanceof ApiError && e.status === 404 ? 'This meeting had no chat.' : 'Could not open the meeting chat.', 'bad');
+    }
+  };
+}
 
 // What a tapped notice asks for, when a window was already open: a chat,
 // or a call to join (push.js hands these over from the service worker).

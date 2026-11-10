@@ -6032,4 +6032,25 @@ the motif: every pitch is on the pentatonic, every cue is distinct, gains
 are at most 0.5, and only the ring and the ringback repeat. The call
 harness (25 checks) still places, answers and ends a call with the new
 ring in the path.
+**The recap.** What a meeting leaves behind was already stored -- the
+attendance, the notes, the transcript -- but each lived behind its own
+panel inside the meeting. `scheduling/recap.go` reads them together, after
+the fact, for the people who were there or were meant to be: attended, or
+invited to the scheduled meeting behind the room (the person who missed the
+meeting they were invited to is exactly who needs it; a stranger with the
+room name is exactly who must not have it). Visits are summed per person
+with the first arrival and the last departure; a room still occupied reads
+as live with time counted to now; a recurring room's recap is of its latest
+gathering (attendance within thirty days of now). Nothing new is written.
+The page (`openRecap` in app.js) opens from the lobby after a meeting ends,
+from the recent list's Recap button, and from the calendar detail of a
+meeting that has been; it offers the transcript and attendance downloads
+the meeting already had and opens the meeting chat. The route is gated on
+joining, not hosting, so a guest who attended may read it.
+`recap.e2e.mjs`: two people meet, a task is written, both leave; the lobby
+offers the recap, it lists both with their time and the task, says there is
+no transcript when captions were off, opens from the recent list, is
+refused to a stranger and an anonymous caller, and on a 390px phone is one
+column inside the viewport. The unit test covers the summing, the live
+case, the invitee who never came, the administrator, and the bounds.
 

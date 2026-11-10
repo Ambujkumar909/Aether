@@ -248,6 +248,8 @@ export const scheduling = {
   // The scheduling assistant: when these people are busy, as spans only.
   freeBusy: (emails, from, to) => api.get('/api/scheduling/freebusy?' + qs({ emails: emails.join(','), from, to })),
   history: () => api.get('/api/scheduling/history'),
+  // What a meeting left behind (engine scheduling/recap.go).
+  recap: (room) => api.get(`/api/scheduling/rooms/${encodeURIComponent(room)}/recap`),
   remove: (id) => api.del(`/api/scheduling/meetings/${encodeURIComponent(id)}`),
   respond: (id, response) =>
     api.post(`/api/scheduling/meetings/${encodeURIComponent(id)}/respond`, { response }),
