@@ -1,11 +1,36 @@
 # Resume here — Teams parity work
 
-## Start here (handoff, 2026-11-09 evening)
+## Start here (handoff, 2026-11-10 evening)
 
-Production plan, Phase 1 (deploy to an Ubuntu server in Docker, for the
-user's org and the public) is **complete** as of 2026-11-09: two-step
-sign-in `0b95751`, SSO `148fbe1`, sign-up guards `8dd0ab9`, capacity
-`057d739`, and the Windows installer/updates `ad9fe53` (CI green).
+**Phase 2 is under way; Phase 1 is complete.** Done on 2026-11-10, each
+with CI green: the calendar (week view, recurring meetings, who is free)
+`07e16ce`; web push notifications `3c021c1`; Aether's own sound set
+`ec3a3df`; the meeting recap `136f900`; keyboard shortcuts (the latest
+commit on main). All are in ARCHITECTURE 6bz, each with its measurement
+and its harness (`calendar`, `push`, `sounds`, `recap`, `shortcuts`
+e2e, all in the CI list). **Next: out of office and notification settings**,
+then server-side speaker selection, data export and deletion; then the
+security phase (threat model, pentest), Phase 4 (bounded send queue so 100
+over WebRTC holds, load client on another machine, multi-node). Owner's
+rules from today: never enable any monetary subscription, billing or paid
+plan (browser push subscriptions are not that and are wanted); the LICENSE
+is still the owner's decision, never pick one.
+
+Gotchas from today: Python text-mode writes on Windows produce CRLF, which
+fails gofmt on CI (`.gitattributes` now pins `*.go` to LF; edit with
+`newline=''`); the layout harness used to excuse content cut off inside
+`.home-main` and now fails any box whose content is wider than it unless
+it is a deliberate sideways scroller (`overscroll-behavior-x: contain`,
+table, pre) or a design clip (hidden/clip, ellipsis, the 1px visually
+hidden label); the runner keeps a harness's detail lines under each FAIL;
+the push harness unsubscribes its extra devices so reruns do not hit the
+10-device cap; the "ended" lobby appears only when a meeting is ended for
+you, not when you leave.
+
+Phase 1 (deploy to an Ubuntu server in Docker, for the user's org and the
+public) was completed on 2026-11-09: two-step sign-in `0b95751`, SSO
+`148fbe1`, sign-up guards `8dd0ab9`, capacity `057d739`, and the Windows
+installer/updates `ad9fe53` (CI green).
 Gates run on the last commit: Windows `-race` suite, Linux test stage
 (`docker build --target test`), image build (`aether:dev`, version
 `2026.1109.1206` stamped from the build time, `/app/desktop/latest.json`
@@ -54,9 +79,10 @@ because job logs need a login).
    `tools/e2e/fakepush.mjs` started by both runners). Aether's own sound set:
    DONE 2026-11-10 (`web/src/sounds.js`, `tools/e2e/sounds.e2e.mjs`, 25
    checks). Meeting recap: DONE 2026-11-10 (`scheduling/recap.go`,
-   `tools/e2e/recap.e2e.mjs`). **Next in Phase 2: keyboard shortcuts**, then
-   out of office and notification settings, server-side speaker selection,
-   data export and deletion. Owner's rule (2026-11-10): never enable any monetary
+   `tools/e2e/recap.e2e.mjs`). Keyboard shortcuts: DONE 2026-11-10 (`web/src/shortcuts.js`,
+   `tools/e2e/shortcuts.e2e.mjs`). **Next in Phase 2: out of office and
+   notification settings**, then server-side speaker selection, data export
+   and deletion. Owner's rule (2026-11-10): never enable any monetary
    subscription, billing or paid-plan feature; browser push subscriptions
    are not that and are wanted. Then the security phase (threat model, pentest), Phase 4.
 

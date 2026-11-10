@@ -221,6 +221,21 @@ async function signIn(page) {
 const SCREENS = [
   { name: 'home', go: async () => {} },
   {
+    // The keyboard shortcuts sheet, opened with ?; the next screen closes it.
+    name: 'shortcuts',
+    go: async (page) => {
+      await page.keyboard.press('?');
+      await sleep(400);
+    },
+  },
+  {
+    name: 'shortcuts-closed',
+    go: async (page) => {
+      await page.keyboard.press('Escape');
+      await sleep(300);
+    },
+  },
+  {
     name: 'chat-list',
     go: async (page) => {
       await page.evaluate(() => document.querySelector('[data-home="chat"]')?.click());

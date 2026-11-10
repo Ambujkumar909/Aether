@@ -8254,3 +8254,30 @@ input, textarea, [contenteditable] { caret-color: var(--brand); }
   .rc-grid { grid-template-columns: 1fr; }
   .dialog-card.recap { max-height: 100dvh; }
 }
+
+/* ==========================================================================
+   Keyboard shortcuts sheet (app.js showShortcuts)
+   ========================================================================== */
+
+.dialog-card.sc-sheet { width: min(760px, calc(100% - 32px)); max-height: 90dvh; }
+.sc-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px 24px; }
+.sc-groups h3 { font-size: 13px; font-weight: 700; color: var(--brand); margin: 0 0 6px; }
+.sc-groups ul { list-style: none; margin: 0; padding: 0; }
+.sc-groups li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; min-height: 36px; }
+.sc-groups li:first-child { border-top: none; }
+.sc-label { color: var(--ink); min-width: 0; }
+.sc-label small { color: var(--ink-3); }
+.sc-keys { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.sc-keys i { font-style: normal; font-size: 11px; color: var(--ink-3); }
+.sc-keys kbd {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  background: var(--surface);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.sc-sheet .hint { margin: 14px 0 0; }

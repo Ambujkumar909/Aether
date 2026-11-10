@@ -76,6 +76,7 @@ ecosystem.
 | Filters (unread, meeting chats, channels, groups, favourites, muted) | Built | |
 | Open chat in new window | Built | Web; bare popup in the shell |
 | Desktop notifications, taskbar/tray badge, ring flash | Built | Windows toasts from the shell; toast rendering not observed headless |
+| Keyboard shortcuts, with a sheet listing them | Built | Letters in a meeting (M, V, S, H, C, P, R, I), chords that work while typing (Ctrl+Shift+M, O, E, K, C, P, H), hold-to-talk (Ctrl+Space), Ctrl+1..5 for the home tabs, / or Ctrl+E to search, ? for the sheet; Command on a Mac (shortcuts.js) |
 | Meeting recap | Built | One page after a meeting: who was there and for how long, the notes, the transcript, the downloads, the meeting chat; for attendees and invitees; from the lobby, the recent list and the calendar detail (ARCHITECTURE 6bz) |
 | Ringtone and notification sounds | Built | Aether's own, synthesised in Web Audio from one pentatonic motif (sounds.js): ring, ringback, message, mention, join, leave, hand, call ended, declined; a level per browser; do not disturb and quiet hours honoured (ARCHITECTURE 6bz) |
 | Push notifications while the browser is closed | Built | Web Push, stdlib RFC 8291 + VAPID; a direct message, a mention, an urgent message, a call; per sign-in session, off when signed out; a switch in the console (ARCHITECTURE 6bz) |

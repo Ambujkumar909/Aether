@@ -6053,4 +6053,23 @@ no transcript when captions were off, opens from the recent list, is
 refused to a stranger and an anonymous caller, and on a 390px phone is one
 column inside the viewport. The unit test covers the summing, the live
 case, the invitee who never came, the administrator, and the bounds.
+**Keyboard shortcuts.** One table (`web/src/shortcuts.js`) names every
+binding with where it applies and what it does; one matcher decides what a
+key press is; the actions stay in app.js. Two kinds: bare letters in a
+meeting (M mute, V camera, S share, H hand, C chat, P people, R reactions,
+I picture in picture), fastest mid-call and ignored while typing, and
+chords that work even while typing (Ctrl+Shift+M, O, E, K, C, P, and H to
+leave), because muting must never wait for the cursor to leave a box. Hold
+Ctrl+Space while muted to talk; letting go mutes again, as does the window
+losing focus. At home, Ctrl+1 to 5 are the tabs, / or Ctrl+E is the search,
+Ctrl+Shift+N starts a meeting, Ctrl+Shift+S schedules one; ? (or Ctrl+.)
+opens the sheet anywhere, Escape closes it. On a Mac the chord's Ctrl is
+Command, and the sheet writes the keys the way that keyboard is labelled. A
+capital M is not the mute key and Ctrl+M is not M: the shift state and the
+modifiers must match the binding exactly, so nothing fires by accident. The
+unit test proves every binding unique within its scope on both keyboards,
+the matcher's rules, and that typing eats letters but not chords; the
+harness (`shortcuts.e2e.mjs`) presses the keys in a real meeting and at
+home, including hold-to-talk and typing M into the chat, and the layout
+audit opens the sheet at three widths.
 

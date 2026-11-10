@@ -70,6 +70,7 @@ import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as re
 import { WSMediaSender, WSMediaReceiver, wsMediaSupported } from './wsmedia.js';
 import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence, cue } from './chat.js';
 import { ringLoop, shouldPlay, soundLevel } from './sounds.js';
+import { resolve as resolveShortcut, format as formatShortcut, groups as shortcutGroups } from './shortcuts.js';
 import { presenceIcon } from './presence.js';
 import { acquireMic } from './echo.js';
 import { Denoiser, denoiseWanted, setDenoiseWanted, denoiseSupported } from './denoise.js';
@@ -4826,15 +4827,10 @@ function wireMeeting() {
     });
   });
 
-  // Muting is the most time-critical action in any meeting and should never
-  // require finding a button.
-  addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if ($('app').classList.contains('hidden')) return;
-    if (e.key === 'm' || e.key === 'M') $('btn-mic').click();
-    if (e.key === 'v' || e.key === 'V') $('btn-cam').click();
-    if (e.key === 'p' || e.key === 'P') togglePiP();
-  });
+  // Keyboard shortcuts (shortcuts.js): the table names them, this acts.
+  // Muting is the most time-critical action in any meeting and must never
+  // require finding a button, so its chord works even while typing.
+  wireShortcuts();
 
   addEventListener('resize', () => {
     renderStage();
@@ -7985,6 +7981,129 @@ async function openRecap(room) {
       toast(e instanceof ApiError && e.status === 404 ? 'This meeting had no chat.' : 'Could not open the meeting chat.', 'bad');
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+
+// scopeNow is where the person is: in a meeting, at home, or somewhere
+// shortcuts do not apply (signing in, a dialog open).
+function shortcutScope() {
+  if (!$('auth')?.classList.contains('hidden') && getComputedStyle($('auth')).display !== 'none') return null;
+  const dialog = $('dialog');
+  if (dialog && !dialog.classList.contains('hidden') && !dialog.querySelector('.sc-sheet')) return null;
+  if (!$('app').classList.contains('hidden')) return 'meeting';
+  if (getComputedStyle($('home')).display !== 'none') return 'home';
+  return null;
+}
+
+let talkHeld = false;
+
+function wireShortcuts() {
+  const actions = {
+    mic: () => $('btn-mic')?.click(),
+    camera: () => $('btn-cam')?.click(),
+    share: () => $('btn-screen')?.click(),
+    hand: () => $('btn-hand')?.click(),
+    chat: () => $('rail-chat')?.click(),
+    people: () => $('rail-people')?.click(),
+    react: () => $('btn-react')?.querySelector(':scope > button')?.click(),
+    pip: () => togglePiP(),
+    leave: () => leaveMeeting(),
+    search: () => {
+      const f = $('top-find');
+      if (f) {
+        f.focus();
+        f.select?.();
+      }
+    },
+    new: () => $('q-new')?.click(),
+    schedule: () => scheduleDialog(),
+    help: () => showShortcuts(),
+    // Hold to talk: while muted, the chord unmutes for as long as it is
+    // held; letting go mutes again. Pressed while unmuted it does nothing.
+    talk: (e) => {
+      if (e.repeat || talkHeld || state.mic) return;
+      talkHeld = true;
+      $('btn-mic')?.click();
+    },
+  };
+  for (const [k, fn] of Object.entries(actions)) actions[k] = fn;
+  addEventListener('keydown', (e) => {
+    // The sheet, while open, answers only to Escape and its own key.
+    if ($('dialog')?.querySelector('.sc-sheet')) {
+      if (e.key === 'Escape' || resolveShortcut(e, 'any')?.binding.action === 'help') {
+        e.preventDefault();
+        closeShortcuts();
+      }
+      return;
+    }
+    const scope = shortcutScope();
+    if (!scope) return;
+    const hit = resolveShortcut(e, scope);
+    if (!hit) return;
+    const fn = actions[hit.binding.action] || (hit.binding.action.startsWith('tab:') ? () => document.querySelector(`[data-home="${hit.binding.action.slice(4)}"]`)?.click() : null);
+    if (!fn) return;
+    e.preventDefault();
+    fn(e);
+  });
+  addEventListener('keyup', (e) => {
+    if (!talkHeld) return;
+    if (e.key === ' ' || e.key === 'Control' || e.key === 'Meta') {
+      talkHeld = false;
+      if (state.mic) $('btn-mic')?.click();
+    }
+  });
+  addEventListener('blur', () => {
+    if (talkHeld) {
+      talkHeld = false;
+      if (state.mic) $('btn-mic')?.click();
+    }
+  });
+}
+
+// The sheet: every binding, grouped by where it applies, written the way
+// this keyboard is labelled. Opened with ? (or Ctrl+.), closed the same
+// way or with Escape.
+function showShortcuts() {
+  const host = $('dialog');
+  if (!host) return;
+  if (host.querySelector('.sc-sheet')) {
+    closeShortcuts();
+    return;
+  }
+  if (!host.classList.contains('hidden')) return;
+  host.innerHTML = `
+    <div class="dialog-card sc-sheet" role="dialog" aria-modal="true" aria-labelledby="sc-title">
+      <div class="rc-head"><h2 id="sc-title">Keyboard shortcuts</h2><button type="button" class="btn" data-close data-cancel>Close</button></div>
+      <div class="sc-groups">${shortcutGroups()
+        .map(
+          (g) => `<section><h3>${esc(g.title)}</h3><ul>${g.items
+            .map(
+              (b) => `<li><span class="sc-label">${esc(b.label)}${b.hold ? ' <small>(hold)</small>' : ''}</span>
+                <span class="sc-keys">${[b.combo, b.alt]
+                  .filter(Boolean)
+                  .map((c) => `<kbd>${esc(formatShortcut(c))}</kbd>`)
+                  .join('<i>or</i>')}</span></li>`
+            )
+            .join('')}</ul></section>`
+        )
+        .join('')}</div>
+      <p class="hint">Single letters work when nothing is being typed. The chords work even while you type.</p>
+    </div>`;
+  host.classList.remove('hidden');
+  host.querySelector('[data-close]').onclick = closeShortcuts;
+  host.onclick = (e) => {
+    if (e.target === host) closeShortcuts();
+  };
+}
+
+function closeShortcuts() {
+  const host = $('dialog');
+  if (!host || !host.querySelector('.sc-sheet')) return;
+  host.classList.add('hidden');
+  host.innerHTML = '';
 }
 
 // What a tapped notice asks for, when a window was already open: a chat,
