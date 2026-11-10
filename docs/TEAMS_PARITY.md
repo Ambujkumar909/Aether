@@ -143,6 +143,11 @@ ecosystem.
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Schedule meetings, categories, invitations | Built | |
+| Calendar: month grid, day agenda, week grid | Built | Day/Week switch, Today; the week scrolls sideways inside its own box on a phone |
+| Recurring meetings | Built | Daily, weekly (chosen days), monthly, every N, until a date; the organiser's zone is kept across clock changes; one occurrence or the series can be cancelled (ARCHITECTURE 6bz) |
+| RSVP (accept, decline) | Built | An answer is to the series; a moved meeting resets answers |
+| Scheduling assistant | Built | "Who is free": busy bars for the people invited, spans only, and "Find the next free time" over five working days |
+| Edit one occurrence of a series | Not yet | Cancel one, yes; a different time or title for one occurrence, not yet |
 | Bookings, Outlook/Google add-ins | N/A | External calendars |
 
 ## Files

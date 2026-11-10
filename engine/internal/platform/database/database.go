@@ -801,6 +801,10 @@ var migrations = []migration{
 			used_at  INTEGER,
 			PRIMARY KEY (user_id, code_mac)
 		)`},
+	// A recurring meeting is one row with its rule; see scheduling/recurrence.go.
+	{"0071_scheduling_recurrence",
+		`ALTER TABLE scheduling_meetings
+		 ADD COLUMN recurrence TEXT NOT NULL DEFAULT ''`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

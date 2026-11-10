@@ -44,6 +44,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/scheduling/meetings/{id}/cancel", p(h.cancel))
 	mux.Handle("POST /api/scheduling/meetings/{id}/respond", p(h.respond))
 	mux.Handle("GET /api/scheduling/conflicts", p(h.conflicts))
+	mux.Handle("GET /api/scheduling/freebusy", p(h.freeBusy))
 	// The caller's own recent meetings -- the ones they were actually in.
 	mux.Handle("GET /api/scheduling/history", p(h.history))
 	mux.Handle("GET /api/scheduling/rooms/{room}/attendance", p(h.attendance))
@@ -308,8 +309,9 @@ type wire struct {
 	EndsAt      time.Time `json:"endsAt"`
 	Invitees    []string  `json:"invitees"`
 	// Emails, each one of the invitees.
-	CoOrganizers []string `json:"coOrganizers"`
-	Admission    string   `json:"admission"`
+	CoOrganizers []string    `json:"coOrganizers"`
+	Admission    string      `json:"admission"`
+	Recurrence   *Recurrence `json:"recurrence"`
 }
 
 func (w wire) toMeeting() *Meeting {
@@ -318,7 +320,11 @@ func (w wire) toMeeting() *Meeting {
 		Category: w.Category, StartsAt: w.StartsAt, EndsAt: w.EndsAt,
 		// Normalised at the boundary, so nothing further in has to wonder
 		// whether it is looking at a value a client chose.
-		Admission: NormaliseAdmission(w.Admission),
+		Admission:  NormaliseAdmission(w.Admission),
+		Recurrence: w.Recurrence,
+	}
+	if m.Recurrence != nil && m.Recurrence.Freq == "" {
+		m.Recurrence = nil // "does not repeat", sent as an empty rule
 	}
 	co := map[string]bool{}
 	for _, e := range w.CoOrganizers {
@@ -410,13 +416,48 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, m)
 }
 
+// cancel ends a meeting, or with {"occurrence": <start ms>} one occurrence
+// of a series. The body is optional: no body is the whole meeting.
 func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Occurrence int64 `json:"occurrence"`
+	}
+	if r.ContentLength != 0 {
+		if err := httpx.Decode(w, r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "bad_request", "malformed request")
+			return
+		}
+	}
 	ip, ua := h.ipua(r)
-	if err := h.svc.Cancel(r.Context(), h.actor(r), r.PathValue("id"), ip, ua); err != nil {
+	if err := h.svc.CancelOccurrence(r.Context(), h.actor(r), r.PathValue("id"), body.Occurrence, ip, ua); err != nil {
 		h.fail(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// freeBusy is the scheduling assistant: ?emails=a,b&from=&to= (RFC3339),
+// answering spans only. Bounded by the service (20 people, 14 days).
+func (h *Handler) freeBusy(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from, err1 := time.Parse(time.RFC3339, q.Get("from"))
+	to, err2 := time.Parse(time.RFC3339, q.Get("to"))
+	if err1 != nil || err2 != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_range", "from and to must be RFC3339")
+		return
+	}
+	var emails []string
+	for _, e := range strings.Split(q.Get("emails"), ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			emails = append(emails, e)
+		}
+	}
+	busy, err := h.svc.FreeBusy(r.Context(), h.actor(r), emails, from, to)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"busy": busy})
 }
 
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
@@ -480,6 +521,8 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadRequest, "too_long", "a meeting may not exceed 24 hours")
 	case errors.Is(err, ErrTooFar):
 		httpx.Error(w, http.StatusBadRequest, "too_far", "that is more than two years away")
+	case errors.Is(err, ErrBadRecurrence):
+		httpx.Error(w, http.StatusBadRequest, "bad_recurrence", strings.TrimPrefix(err.Error(), "scheduling: "))
 	case errors.Is(err, ErrQnAClosed):
 		httpx.Error(w, http.StatusConflict, "qna_closed", "Q&A is closed")
 	case errors.Is(err, ErrQnABody):

@@ -88,6 +88,9 @@ function auditInPage(touch) {
   // faded out, not marked hidden, and the box has area. A signed-out panel
   // left in the DOM at opacity 0 behind the home screen is not a target.
   const hiddenCache = new Map();
+  // A deliberate sideways scroller says so (overscroll-behavior-x: contain),
+  // or is a table, code, or the meeting strip.
+  const scrollsByDesign = (el, cs) => cs.overscrollBehaviorX === 'contain' || el.matches('table, pre, .strip, [data-scroll-x]');
   const hiddenBy = (el) => {
     if (hiddenCache.has(el)) return hiddenCache.get(el);
     let h = false;
@@ -105,9 +108,19 @@ function auditInPage(touch) {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
+  // An ancestor excuses a wide child only when it clips by design (hidden,
+  // clip) or is a deliberate sideways scroller: a table, code, or a box
+  // that says so with overscroll-behavior-x: contain. A surface that merely
+  // scrolls vertically (overflow-y: auto makes overflow-x auto too) does
+  // not: content cut off at its right edge is a page overflow the user
+  // sees, which is exactly what the calendar screenshots showed and these
+  // numbers once excused.
   const clipsX = (el) => {
     const cs = getComputedStyle(el);
-    return /(hidden|auto|scroll|clip)/.test(cs.overflowX) || /(hidden|auto|scroll|clip)/.test(cs.overflow);
+    const ox = cs.overflowX;
+    if (/(hidden|clip)/.test(ox)) return true;
+    if (/(auto|scroll)/.test(ox)) return scrollsByDesign(el, cs);
+    return false;
   };
   const path = (el) => {
     const parts = [];
@@ -119,12 +132,33 @@ function auditInPage(touch) {
     }
     return parts.join(' > ');
   };
-  const out = { vw, pageScrollWidth: document.documentElement.scrollWidth, overflowing: [], smallTargets: [], counts: {} };
+  const out = { vw, pageScrollWidth: document.documentElement.scrollWidth, overflowing: [], cutOff: [], smallTargets: [], counts: {} };
   const all = [...document.querySelectorAll('body *')];
   out.counts.elements = all.length;
+  // A deliberate sideways scroller says so (overscroll-behavior-x: contain),
+  // or is a table, code, or the meeting strip.
   for (const el of all) {
     if (!isVisible(el)) continue;
     const r = el.getBoundingClientRect();
+    // Content wider than the box that holds it, in a box that is not meant
+    // to scroll sideways: the user sees it cut off at the right edge, or a
+    // surface that drags sideways. Independent of the viewport check below,
+    // which an ancestor's clipping can excuse; this one cannot be excused.
+    // A 1px box with clip-path is the visually-hidden pattern (a label for
+    // screen readers), not cut-off content.
+    if (el.scrollWidth > el.clientWidth + 2 && el.clientWidth > 1) {
+      const cs = getComputedStyle(el);
+      if (/(auto|scroll|hidden)/.test(cs.overflowX) && !scrollsByDesign(el, cs) && cs.textOverflow !== 'ellipsis' && cs.clipPath === 'none' && out.cutOff.length < 25) {
+        // Name the widest thing inside, so the finding says what to fix.
+        const er = el.getBoundingClientRect();
+        let culprit = null;
+        for (const c of el.querySelectorAll('*')) {
+          const cr = c.getBoundingClientRect();
+          if (cr.width > 0 && cr.right > er.right + 1 && (!culprit || cr.right > culprit.right)) culprit = { path: path(c), right: Math.round(cr.right), w: Math.round(cr.width) };
+        }
+        out.cutOff.push({ path: path(el), content: el.scrollWidth, box: el.clientWidth, culprit });
+      }
+    }
     if (r.right > vw + 1 || r.left < -1) {
       // Inside something that clips horizontally? Then it is that thing's
       // business (a scrolling table, a marquee), not a page overflow.
@@ -299,11 +333,28 @@ const SCREENS = [
     },
   },
   {
-    // The schedule form (title, time, invitees, co-organizers): a dialog on
-    // a desktop, a sheet on a phone.
+    name: 'calendar-week',
+    go: async (page) => {
+      await page.evaluate(() => document.getElementById('cv-week')?.click());
+      await sleep(400);
+    },
+  },
+  {
+    // The schedule form (title, time, repeats, invitees, co-organizers): a
+    // dialog on a desktop, a sheet on a phone. With "Every week" chosen, so
+    // the rule's controls are measured too.
     name: 'schedule',
     go: async (page) => {
+      await page.evaluate(() => document.getElementById('cv-day')?.click());
       await page.evaluate(() => document.getElementById('cal-new')?.click());
+      await sleep(300);
+      await page.evaluate(() => {
+        const s = document.getElementById('s-rep');
+        if (s) {
+          s.value = 'weekly';
+          s.dispatchEvent(new Event('change'));
+        }
+      });
       await sleep(600);
     },
   },
@@ -618,6 +669,10 @@ try {
         fail(`${tag}: ${a.overflowing.length} element(s) leave the viewport`);
         for (const o of a.overflowing.slice(0, 6)) console.log(`          ${o.path}  [${o.left}..${o.right}] w=${o.w}`);
       } else okay(`${tag}: nothing leaves the viewport`);
+      if (a.cutOff.length) {
+        fail(`${tag}: content cut off or dragging sideways inside ${a.cutOff.length} box(es) not meant to scroll sideways`);
+        for (const o of a.cutOff.slice(0, 6)) console.log(`          ${o.path}  content ${o.content}px in a ${o.box}px box${o.culprit ? `; widest inside: ${o.culprit.path} w=${o.culprit.w} right=${o.culprit.right}` : ''}`);
+      } else okay(`${tag}: nothing cut off sideways`);
       // Controls drawn on top of each other: the meeting bar's buttons and the
       // clock. Overflow and tap-size checks cannot see this, and it got past
       // them twice (the phone's clock under Chat and People).

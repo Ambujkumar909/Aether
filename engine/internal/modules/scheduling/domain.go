@@ -87,6 +87,12 @@ type Meeting struct {
 
 	Invitees []Invitee `json:"invitees"`
 
+	// Recurrence makes this row a series (recurrence.go). In a list each
+	// occurrence is its own entry with Occurrence set to its start; by id
+	// the series itself comes back, with the first occurrence's times.
+	Recurrence *Recurrence `json:"recurrence,omitempty"`
+	Occurrence int64       `json:"occurrence,omitempty"`
+
 	// Live reports whether anybody is in the room at this moment. It is not
 	// stored: a meeting's clock says when it was meant to run, and this says
 	// whether it actually is. A meeting that overruns stays live past its end
@@ -181,6 +187,9 @@ type Repository interface {
 	// CompleteRoom marks the meeting behind a room finished. Called when the
 	// last person leaves, which is when a meeting is actually over.
 	CompleteRoom(ctx context.Context, room string, at time.Time) error
+	// Busy lists the scheduled meetings an address organises or is invited
+	// to that overlap a window: the scheduling assistant's free/busy.
+	Busy(ctx context.Context, email string, from, to time.Time) ([]*Meeting, error)
 
 	// Attendance: what actually happened, as opposed to what was scheduled.
 	// See attendance.go.

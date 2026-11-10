@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // zone rules for recurring meetings, inside the image
 
 	"github.com/aether-rtc/aether/internal/ledger"
 	"github.com/aether-rtc/aether/internal/modular"

@@ -3,6 +3,7 @@ package scheduling
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,7 +21,7 @@ func NewSQLRepository(db *database.DB) *SQLRepository { return &SQLRepository{db
 
 const cols = `id, room, title, description, category, status,
 	starts_at, ends_at, organizer_id, organizer_email, created_at, updated_at,
-	admission`
+	admission, recurrence`
 
 // Create writes the meeting and its invitees in one transaction. A meeting
 // that exists without its invitee rows is a meeting nobody was asked to,
@@ -34,12 +35,12 @@ func (r *SQLRepository) Create(ctx context.Context, m *Meeting) error {
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO scheduling_meetings (`+cols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.ID, m.Room, m.Title, m.Description, string(m.Category), string(m.Status),
-		m.StartsAt.UnixMilli(), m.EndsAt.UnixMilli(),
+		m.StartsAt.UnixMilli(), m.storedEnd().UnixMilli(),
 		m.OrganizerID, m.OrganizerEmail,
 		m.CreatedAt.UnixMilli(), m.UpdatedAt.UnixMilli(),
-		NormaliseAdmission(m.Admission)); err != nil {
+		NormaliseAdmission(m.Admission), recurrenceJSON(m.Recurrence)); err != nil {
 		return fmt.Errorf("insert meeting: %w", err)
 	}
 	if err := replaceInvitees(ctx, tx, m); err != nil {
@@ -58,11 +59,11 @@ func (r *SQLRepository) Update(ctx context.Context, m *Meeting) error {
 	res, err := tx.ExecContext(ctx, `
 		UPDATE scheduling_meetings SET
 			room=?, title=?, description=?, category=?, status=?,
-			starts_at=?, ends_at=?, updated_at=?, admission=?
+			starts_at=?, ends_at=?, updated_at=?, admission=?, recurrence=?
 		WHERE id=?`,
 		m.Room, m.Title, m.Description, string(m.Category), string(m.Status),
-		m.StartsAt.UnixMilli(), m.EndsAt.UnixMilli(),
-		m.UpdatedAt.UnixMilli(), NormaliseAdmission(m.Admission), m.ID)
+		m.StartsAt.UnixMilli(), m.storedEnd().UnixMilli(),
+		m.UpdatedAt.UnixMilli(), NormaliseAdmission(m.Admission), recurrenceJSON(m.Recurrence), m.ID)
 	if err != nil {
 		return fmt.Errorf("update meeting: %w", err)
 	}
@@ -266,18 +267,51 @@ func (r *SQLRepository) Conflicts(ctx context.Context, email string, from, to ti
 	return out, rows.Err()
 }
 
+// Busy is Conflicts for the scheduling assistant: the same question for
+// somebody else's address, no exclusion.
+func (r *SQLRepository) Busy(ctx context.Context, email string, from, to time.Time) ([]*Meeting, error) {
+	ms, err := r.Conflicts(ctx, email, from, to, "")
+	if err != nil {
+		return nil, err
+	}
+	// With the invitees, because a declined invitation is not busy.
+	if err := r.loadInvitees(ctx, ms); err != nil {
+		return nil, err
+	}
+	return ms, nil
+}
+
+// recurrenceJSON is the stored rule: empty for a single meeting, which is
+// also what CompleteRoom keys on.
+func recurrenceJSON(r *Recurrence) string {
+	if r == nil {
+		return ""
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scan(s rowScanner) (*Meeting, error) {
 	var m Meeting
 	var cat, status string
 	var starts, ends, created, updated int64
-	var admission string
+	var admission, recur string
 	err := s.Scan(&m.ID, &m.Room, &m.Title, &m.Description, &cat, &status,
 		&starts, &ends, &m.OrganizerID, &m.OrganizerEmail, &created, &updated,
-		&admission)
+		&admission, &recur)
 	if err != nil {
 		return nil, err
+	}
+	if recur != "" {
+		var r Recurrence
+		if json.Unmarshal([]byte(recur), &r) == nil && r.Freq != "" {
+			m.Recurrence = &r
+		}
 	}
 	// Normalised on the way out as well as in. A row written by an older
 	// version, or edited by hand, must not be able to open a meeting.
@@ -357,7 +391,7 @@ func (r *SQLRepository) CompleteRoom(ctx context.Context, room string, at time.T
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE scheduling_meetings
 		   SET status = ?, updated_at = ?
-		 WHERE room = ? AND status = ? AND starts_at <= ?`,
+		 WHERE room = ? AND status = ? AND starts_at <= ? AND recurrence = ''`,
 		string(StatusCompleted), at.UnixMilli(), room,
 		string(StatusScheduled), at.UnixMilli())
 	if err != nil {

@@ -77,6 +77,7 @@ import { VIEWS, LARGE_GALLERY_MIN_PEOPLE, tileCap, bestGrid, galleryOrder } from
 import { health, show as showHealth } from './health.js';
 import { BOARD_W, BOARD_H, MAX_POINTS, W, TOOL, PALETTE, INK, NOTE_COLORS, toBoard, encodeOpen, encodeStroke, encodeSimple, encodeNote, decodeWhiteboard } from './whiteboard.js';
 import { K, MAX_ROOMS, MAX_NAME, MAX_ANNOUNCEMENT, suggestRooms, autoAssign, shuffle, remaining, decodeBreakout, encodeSet, encodeCmd, encodeAnnounce } from './breakout.js';
+import { weekOf, hourSpan, layoutColumns, recurrenceText, busyBlocks, freeSlot } from './calendar.js';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -5831,10 +5832,13 @@ async function loadMeetings() {
     } catch {
       state.history = state.history ?? [];
     }
+    // An occurrence of a series shares the series' id; the key tells them
+    // apart where the calendar draws them.
     state.meetings = (res.meetings ?? []).map((m) => ({
       ...m,
       start: new Date(m.startsAt),
       end: new Date(m.endsAt),
+      key: m.occurrence ? `${m.id}:${m.occurrence}` : m.id,
     }));
   } catch {
     state.meetings = [];
@@ -6880,11 +6884,16 @@ function renderCalendar() {
       </div>
 
       <div class="cal-col">
+        <div class="cal-views" role="group" aria-label="Calendar view">
+          <button type="button" id="cv-day" data-cv="day">Day</button>
+          <button type="button" id="cv-week" data-cv="week">Week</button>
+          <button type="button" id="cv-today" class="cal-today">Today</button>
+        </div>
         <div class="day">
           <div class="day-head">
-            <button id="d-prev"><svg width="16" height="16" viewBox="0 0 24 24"><use href="#i-back"/></svg></button>
+            <button id="d-prev" aria-label="Earlier"><svg width="16" height="16" viewBox="0 0 24 24"><use href="#i-back"/></svg></button>
             <b id="day-label"></b>
-            <button id="d-next"><svg width="16" height="16" viewBox="0 0 24 24" style="transform:rotate(180deg)"><use href="#i-back"/></svg></button>
+            <button id="d-next" aria-label="Later"><svg width="16" height="16" viewBox="0 0 24 24" style="transform:rotate(180deg)"><use href="#i-back"/></svg></button>
           </div>
           <div class="day-body" id="day-body"></div>
         </div>
@@ -6905,18 +6914,34 @@ function renderCalendar() {
     state.calMonth = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() + 1, 1);
     paintMonth();
   };
-  $('d-prev').onclick = () => {
-    state.calDate = new Date(state.calDate.getTime() - 86400000);
+  // A step is a day in the day view and a week in the week view.
+  const step = (dir) => {
+    const d = state.calDate;
+    const n = state.calView === 'week' ? 7 : 1;
+    state.calDate = new Date(d.getFullYear(), d.getMonth(), d.getDate() + dir * n, 12);
     state.calMonth = new Date(state.calDate.getFullYear(), state.calDate.getMonth(), 1);
     paintMonth();
     paintDay();
   };
-  $('d-next').onclick = () => {
-    state.calDate = new Date(state.calDate.getTime() + 86400000);
+  $('d-prev').onclick = () => step(-1);
+  $('d-next').onclick = () => step(1);
+  $('cv-today').onclick = () => {
+    state.calDate = new Date();
     state.calMonth = new Date(state.calDate.getFullYear(), state.calDate.getMonth(), 1);
     paintMonth();
     paintDay();
   };
+  main.querySelectorAll('[data-cv]').forEach((b) => {
+    b.onclick = () => {
+      state.calView = b.dataset.cv;
+      try {
+        localStorage.setItem('aether.calView', state.calView);
+      } catch {
+        // A remembered preference is a convenience, never a requirement.
+      }
+      paintDay();
+    };
+  });
 
   paintCats();
   paintMonth();
@@ -7000,7 +7025,103 @@ function paintMonth() {
   );
 }
 
+// The repeat mark on an event of a series: Aether's own glyph (index.html).
+const REPEAT_MARK = '<svg class="rep-mark" width="12" height="12" viewBox="0 0 24 24" aria-label="Repeats"><use href="#i-repeat"/></svg>';
+
 function paintDay() {
+  if (!state.calView) {
+    try {
+      state.calView = localStorage.getItem('aether.calView') === 'week' ? 'week' : 'day';
+    } catch {
+      state.calView = 'day';
+    }
+  }
+  document.querySelectorAll('[data-cv]').forEach((b) => b.classList.toggle('active', b.dataset.cv === state.calView));
+  if (state.calView === 'week') paintWeek();
+  else paintDayAgenda();
+}
+
+// The week: seven day columns over the hours the week uses, events placed by
+// their minutes and sharing the width where they overlap (calendar.js).
+// It scrolls sideways inside its own box on a narrow screen; the page never
+// does.
+function paintWeek() {
+  const start = weekOf(state.calDate);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  const sameMonth = start.getMonth() === new Date(end.getTime() - 1).getMonth();
+  $('day-label').textContent =
+    `${start.toLocaleDateString([], { day: 'numeric', month: sameMonth ? undefined : 'short' })} – ` +
+    new Date(end.getTime() - 1).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const list = visibleMeetings().filter((m) => m.start < end && m.end > start);
+  const [firstH, lastH] = hourSpan(list);
+  const hours = lastH - firstH;
+  const today = new Date();
+  const days = [];
+  for (let i = 0; i < 7; i++) days.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+
+  const head = days
+    .map(
+      (d) => `<button type="button" class="week-day${sameDay(d, today) ? ' today' : ''}${sameDay(d, state.calDate) ? ' sel' : ''}" data-d="${d.toISOString()}">
+        <b>${d.toLocaleDateString([], { weekday: 'short' })}</b><span>${d.getDate()}</span></button>`
+    )
+    .join('');
+  const gutter = Array.from({ length: hours }, (_, i) => {
+    const h = firstH + i;
+    return `<div class="week-hour">${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'am' : 'pm'}</div>`;
+  }).join('');
+  const cols = days
+    .map((d) => {
+      const dayStart = d.getTime() + firstH * 3600000;
+      const span = hours * 3600000;
+      const placed = layoutColumns(list.filter((m) => sameDay(m.start, d)));
+      const evs = placed
+        .map(({ m, col, cols }) => {
+          const top = Math.max(0, ((m.start.getTime() - dayStart) / span) * 100);
+          const bottom = Math.min(100, ((m.end.getTime() - dayStart) / span) * 100);
+          const w = 100 / cols;
+          return `<div class="wev ${CAT_CLASS[m.category] ?? 'c-sage'}${m.live ? ' live' : ''}" data-open="${esc(m.key)}"
+            style="top:${top}%;height:${Math.max(2.5, bottom - top)}%;left:${col * w}%;width:${w}%" title="${esc(m.title)}">
+            <span class="wev-time">${esc(clockHM(m.start))}${m.recurrence ? REPEAT_MARK : ''}</span>
+            <span class="wev-title">${esc(m.title)}</span>
+          </div>`;
+        })
+        .join('');
+      const nowLine =
+        sameDay(d, today) && today.getHours() >= firstH && today.getHours() < lastH
+          ? `<i class="week-now" style="top:${((today.getTime() - dayStart) / span) * 100}%"></i>`
+          : '';
+      return `<div class="week-col${sameDay(d, today) ? ' today' : ''}" data-d="${d.toISOString()}">${evs}${nowLine}</div>`;
+    })
+    .join('');
+  $('day-body').innerHTML = `<div class="week">
+    <div class="week-head"><span class="week-gutter"></span>${head}</div>
+    <div class="week-body" style="--hours:${hours}">
+      <div class="week-gutter">${gutter}</div>
+      ${cols}
+    </div>
+  </div>`;
+  $('day-body')
+    .querySelectorAll('.week-day')
+    .forEach((b) => {
+      b.onclick = () => {
+        state.calDate = new Date(b.dataset.d);
+        state.calView = 'day';
+        paintMonth();
+        paintDay();
+      };
+    });
+  $('day-body')
+    .querySelectorAll('[data-open]')
+    .forEach((el) => {
+      el.onclick = () => {
+        const m = state.meetings.find((x) => x.key === el.dataset.open);
+        if (m) meetingDetail(m);
+      };
+    });
+}
+
+function paintDayAgenda() {
   $('day-label').textContent = state.calDate.toLocaleDateString([], {
     day: 'numeric',
     month: 'long',
@@ -7028,9 +7149,9 @@ function paintDay() {
       <div class="hour-slot">
         ${inHour
           .map(
-            (m) => `<div class="event ${CAT_CLASS[m.category] ?? 'c-sage'}" data-open="${esc(m.id)}">
+            (m) => `<div class="event ${CAT_CLASS[m.category] ?? 'c-sage'}" data-open="${esc(m.key)}">
               <div class="event-top">
-                <span>${esc(clockHM(m.start))}</span>
+                <span>${esc(clockHM(m.start))}${m.recurrence ? REPEAT_MARK : ''}</span>
                 <span>${m.durationMinutes ?? Math.round((m.end - m.start) / 60000)} min</span>
               </div>
               <div class="event-title">${esc(m.title)}</div>
@@ -7045,25 +7166,122 @@ function paintDay() {
     .querySelectorAll('[data-open]')
     .forEach((el) => {
       el.onclick = () => {
-        const m = state.meetings.find((x) => x.id === el.dataset.open);
-        if (m) joinMeeting(m.room, m.title);
+        const m = state.meetings.find((x) => x.key === el.dataset.open);
+        if (m) meetingDetail(m);
       };
     });
 }
 
+// What a calendar entry is, and what you can do with it: join; answer the
+// invitation; as the organiser, cancel the meeting -- or, for a series, this
+// one occurrence or the whole series. Cancelling asks twice, in the same
+// button, rather than in a browser prompt.
+function meetingDetail(m) {
+  const host = $('dialog');
+  if (!host || !host.classList.contains('hidden')) return;
+  const me = session.user?.email?.toLowerCase();
+  const mine = m.organizerId === session.user?.id;
+  const inv = (m.invitees ?? []).find((i) => i.email?.toLowerCase() === me);
+  const others = (m.invitees ?? []).filter((i) => i.email?.toLowerCase() !== m.organizerEmail?.toLowerCase());
+  const when = `${m.start.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · ${clockHM(m.start)} – ${clockHM(m.end)}`;
+  host.innerHTML = `
+    <div class="dialog-card md-card" role="dialog" aria-modal="true" aria-labelledby="md-title">
+      <div class="md-top"><i class="md-cat ${CAT_CLASS[m.category] ?? 'c-sage'}"></i><span class="md-catname">${esc(CATEGORIES.find((c) => c.id === m.category)?.label ?? 'Meeting')}</span>${m.live ? '<span class="md-live">Happening now</span>' : ''}</div>
+      <h2 id="md-title">${esc(m.title)}</h2>
+      <p class="md-when">${esc(when)}</p>
+      ${m.recurrence ? `<p class="md-rep">${REPEAT_MARK} ${esc(recurrenceText(m.recurrence))}</p>` : ''}
+      ${m.description ? `<p class="md-desc">${esc(m.description)}</p>` : ''}
+      <p class="md-people">${mine ? 'Organised by you' : 'Organised by ' + esc(m.organizerEmail || '')} · ${others.length} invited${inv && !mine ? ' · you ' + esc(inv.response === 'pending' ? 'have not answered' : inv.response) : ''}</p>
+      <div class="dialog-actions md-actions">
+        ${inv && !mine ? `<button type="button" class="btn${inv.response === 'declined' ? ' active' : ''}" data-answer="declined">Decline</button>
+             <button type="button" class="btn${inv.response === 'accepted' ? ' active' : ''}" data-answer="accepted">Confirm</button>` : ''}
+        ${mine && m.recurrence ? '<button type="button" class="btn btn-quiet md-danger" data-cancel-occ>Cancel this occurrence</button>' : ''}
+        ${mine ? `<button type="button" class="btn btn-quiet md-danger" data-cancel-all>${m.recurrence ? 'Cancel series' : 'Cancel meeting'}</button>` : ''}
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Close</button>
+        <button type="button" class="btn btn-primary" data-join>Join</button>
+      </div>
+    </div>`;
+  host.classList.remove('hidden');
+  const close = () => {
+    host.classList.add('hidden');
+    host.innerHTML = '';
+  };
+  host.onclick = (e) => {
+    if (e.target === host) close();
+  };
+  host.querySelector('[data-close]').onclick = close;
+  host.querySelector('[data-join]').onclick = () => {
+    close();
+    joinMeeting(m.room, m.title);
+  };
+  const refresh = async () => {
+    await loadMeetings();
+    renderHome();
+    if (state.homeTab === 'calendar') renderCalendar();
+  };
+  host.querySelectorAll('[data-answer]').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await scheduling.respond(m.id, b.dataset.answer);
+        toast(b.dataset.answer === 'accepted' ? 'Confirmed.' : 'Declined.');
+        close();
+        await refresh();
+      } catch (e) {
+        toast(e instanceof ApiError ? e.message : 'Could not respond', 'bad');
+      }
+    };
+  });
+  // Ask twice: the first press changes the button's words, the second does it.
+  const twice = (btn, ask, act) => {
+    if (!btn) return;
+    btn.onclick = async () => {
+      if (!btn.dataset.sure) {
+        btn.dataset.sure = '1';
+        btn.textContent = ask;
+        return;
+      }
+      btn.disabled = true;
+      try {
+        await act();
+        close();
+        await refresh();
+      } catch (e) {
+        toast(e instanceof ApiError ? e.message : 'Could not cancel', 'bad');
+        btn.disabled = false;
+      }
+    };
+  };
+  twice(host.querySelector('[data-cancel-occ]'), 'Cancel just this one?', async () => {
+    await scheduling.cancelOccurrence(m.id, m.occurrence);
+    toast('This occurrence is cancelled.');
+  });
+  twice(host.querySelector('[data-cancel-all]'), m.recurrence ? 'Cancel every occurrence?' : 'Cancel it for everyone?', async () => {
+    await scheduling.cancel(m.id);
+    toast(m.recurrence ? 'The series is cancelled.' : 'Cancelled.');
+  });
+}
+
 function paintInvites() {
   const me = session.user?.email?.toLowerCase();
+  const seen = new Set();
   const pending = state.meetings
     .filter(
       (m) =>
         m.status === 'scheduled' &&
         m.end.getTime() >= Date.now() &&
-        (m.invitees ?? []).some((i) => i.email === me && i.response === 'pending')
+        (m.invitees ?? []).some((i) => i.email === me && i.response === 'pending') &&
+        !seen.has(m.id) &&
+        seen.add(m.id)
     )
     .sort((a, b) => a.start - b.start);
 
+  // A cancelled series appears once, at its first occurrence still ahead.
+  const seenCancelled = new Set();
   const cancelled = state.meetings
     .filter((m) => m.status === 'cancelled')
+    .sort((a, b) => a.start - b.start)
+    .filter((m) => (m.end.getTime() >= Date.now() || !m.recurrence) && !seenCancelled.has(m.id) && seenCancelled.add(m.id))
     .sort((a, b) => b.start - a.start)
     .slice(0, 2);
 
@@ -7080,6 +7298,7 @@ function paintInvites() {
       <svg width="15" height="15" viewBox="0 0 24 24"><use href="#i-calendar"/></svg>
       ${esc(m.start.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}
     </div>
+    ${m.recurrence ? `<div class="inv-meta">${REPEAT_MARK} ${esc(recurrenceText(m.recurrence))}</div>` : ''}
     ${
       dead
         ? `<div class="inv-dead">Cancelled</div>`
@@ -7236,6 +7455,23 @@ function scheduleDialog() {
         <select id="s-cat" class="input">
           ${CATEGORIES.map((c) => `<option value="${c.id}">${c.label}</option>`).join('')}
         </select></label>
+      <label class="field"><span>Repeats</span>
+        <select id="s-rep" class="input">
+          <option value="">Does not repeat</option>
+          <option value="daily">Every day</option>
+          <option value="weekly">Every week</option>
+          <option value="monthly">Every month</option>
+        </select></label>
+      <div class="rep" id="s-rep-opts" hidden>
+        <label class="field"><span>Every</span>
+          <span class="rep-n"><input id="s-rep-n" class="input" type="number" min="1" max="99" value="1" inputmode="numeric" /><span id="s-rep-unit">weeks</span></span></label>
+        <div class="field rep-days-field" id="s-rep-days-field"><span>On</span>
+          <div class="rep-days" id="s-rep-days" role="group" aria-label="Days of the week">
+            ${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button type="button" data-wd="${d}" aria-pressed="false">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]}</button>`).join('')}
+          </div></div>
+        <label class="field"><span>Until</span>
+          <input id="s-rep-until" class="input" type="date" /></label>
+      </div>
       <label class="field"><span>Invite people</span>
         <input id="s-inv" class="input" placeholder="Type a name, or an email address"
                autocomplete="off" spellcheck="false" />
@@ -7244,6 +7480,11 @@ function scheduleDialog() {
         <input id="s-coorg" class="input" placeholder="Choose co-organizers from the people invited"
                autocomplete="off" spellcheck="false" /></label>
       <p class="hint">Co-organizers run the meeting with you: they can admit people, change meeting options and end the meeting. Up to 10, from the people invited.</p>
+      <div class="assist" id="s-assist" hidden>
+        <div class="assist-head"><span>Who is free</span><button type="button" class="btn sm" id="s-find">Find the next free time</button></div>
+        <div class="assist-rows" id="s-assist-rows"></div>
+        <p class="hint" id="s-assist-note"></p>
+      </div>
       <p class="hint" id="s-warn"></p>
       <div class="dialog-actions">
         <button class="btn" data-cancel>Cancel</button>
@@ -7283,12 +7524,143 @@ function scheduleDialog() {
   $('s-end').onchange = checkClash;
   checkClash();
 
+  // Repeats. The weekday row shows for a weekly rule and starts on the
+  // start's weekday; "until" starts three months out.
+  const repOpts = $('s-rep-opts');
+  const wdButtons = [...$('s-rep-days').querySelectorAll('[data-wd]')];
+  const pressed = (b) => b.getAttribute('aria-pressed') === 'true';
+  wdButtons.forEach((b) => (b.onclick = () => b.setAttribute('aria-pressed', pressed(b) ? 'false' : 'true')));
+  const syncRep = () => {
+    const f = $('s-rep').value;
+    repOpts.hidden = !f;
+    $('s-rep-unit').textContent = { daily: 'days', weekly: 'weeks', monthly: 'months' }[f] ?? '';
+    $('s-rep-days-field').hidden = f !== 'weekly';
+    if (f === 'weekly' && !wdButtons.some(pressed)) {
+      const s = new Date($('s-start').value);
+      const wd = isNaN(s) ? start.getDay() : s.getDay();
+      wdButtons.find((b) => Number(b.dataset.wd) === wd)?.setAttribute('aria-pressed', 'true');
+    }
+    if (f && !$('s-rep-until').value) {
+      const s = new Date($('s-start').value);
+      const u = new Date(isNaN(s) ? start : s);
+      u.setMonth(u.getMonth() + 3);
+      $('s-rep-until').value = `${u.getFullYear()}-${pad2(u.getMonth() + 1)}-${pad2(u.getDate())}`;
+    }
+  };
+  $('s-rep').onchange = syncRep;
+  const recurrence = () => {
+    const f = $('s-rep').value;
+    if (!f) return undefined;
+    const until = $('s-rep-until').value;
+    return {
+      freq: f,
+      interval: Math.min(99, Math.max(1, Number($('s-rep-n').value) || 1)),
+      days: f === 'weekly' ? wdButtons.filter(pressed).map((b) => Number(b.dataset.wd)) : undefined,
+      // The whole of that day, in this zone; the server keeps the zone so
+      // 09:00 stays 09:00 across a clock change.
+      until: until ? new Date(until + 'T23:59:59').toISOString() : undefined,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  };
+
+  // Who is free: for the people typed so far and you, the chosen day's
+  // working hours as bars, the proposed time marked on them. Asked a
+  // moment after typing stops; an answer to an older question is dropped.
+  const assist = $('s-assist');
+  let assistSeq = 0;
+  let assistTimer = 0;
+  const people = () =>
+    [...new Set([session.user?.email, ...($('s-inv')?.value ?? '').split(/[,\s]+/)].map((e) => (e ?? '').trim().toLowerCase()).filter((e) => e.includes('@')))].slice(0, 20);
+  const paintAssist = (busy, s, e) => {
+    const emails = people();
+    if (emails.length < 2) {
+      assist.hidden = true;
+      return;
+    }
+    assist.hidden = false;
+    const day = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    const [h0, h1] = [8, 18];
+    const pick = busyBlocks([{ from: s, to: e }], day, h0, h1)[0];
+    const hours = Array.from({ length: h1 - h0 + 1 }, (_, i) => h0 + i)
+      .filter((h) => h % 2 === 0)
+      .map((h) => `<span style="left:${((h - h0) / (h1 - h0)) * 100}%">${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'am' : 'pm'}</span>`)
+      .join('');
+    const clash = new Set();
+    const rows = emails
+      .map((em) => {
+        const spans = busy?.[em] ?? [];
+        if (spans.some((b) => new Date(b.from) < e && new Date(b.to) > s)) clash.add(em);
+        const blocks = busyBlocks(spans, day, h0, h1)
+          .map((b) => `<i style="left:${b.left}%;width:${b.width}%"></i>`)
+          .join('');
+        const who = em === session.user?.email?.toLowerCase() ? 'You' : em;
+        return `<div class="assist-row${clash.has(em) ? ' clash' : ''}"><span class="assist-who" title="${esc(em)}">${esc(who)}</span>
+          <div class="assist-bar">${blocks}${pick ? `<b class="assist-pick" style="left:${pick.left}%;width:${pick.width}%"></b>` : ''}</div></div>`;
+      })
+      .join('');
+    $('s-assist-rows').innerHTML = `<div class="assist-row assist-scale"><span class="assist-who"></span><div class="assist-bar">${hours}</div></div>${rows}`;
+    $('s-assist-note').textContent = clash.size
+      ? `${clash.size === 1 ? 'One person is' : clash.size + ' people are'} busy at that time.`
+      : `Everyone is free at ${clockHM(s)}.`;
+  };
+  const askAssist = async () => {
+    if (!$('s-start') || !$('s-end')) return; // the dialog closed while the timer ran
+    const s = new Date($('s-start').value);
+    const e = new Date($('s-end').value);
+    const emails = people();
+    if (isNaN(s) || isNaN(e) || e <= s || emails.length < 2) {
+      assist.hidden = true;
+      return;
+    }
+    const seq = ++assistSeq;
+    const day = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    try {
+      const res = await scheduling.freeBusy(emails, day.toISOString(), new Date(day.getTime() + 86400000).toISOString());
+      if (seq !== assistSeq) return; // a newer question is in flight
+      paintAssist(res.busy ?? {}, s, e);
+    } catch {
+      if (seq === assistSeq) assist.hidden = true;
+    }
+  };
+  const assistSoon = () => {
+    clearTimeout(assistTimer);
+    assistTimer = setTimeout(askAssist, 350);
+  };
+  $('s-inv').addEventListener('input', assistSoon);
+  $('s-inv').addEventListener('change', assistSoon);
+  $('s-start').addEventListener('change', assistSoon);
+  $('s-end').addEventListener('change', assistSoon);
+  $('s-find').onclick = async () => {
+    const s = new Date($('s-start').value);
+    const e = new Date($('s-end').value);
+    const emails = people();
+    if (isNaN(s) || isNaN(e) || e <= s) return;
+    const minutes = Math.round((e - s) / 60000);
+    const from = new Date(Math.max(Date.now(), s.getTime()));
+    const day = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    try {
+      const res = await scheduling.freeBusy(emails, day.toISOString(), new Date(day.getTime() + 7 * 86400000).toISOString());
+      const slot = freeSlot(res.busy ?? {}, from, minutes);
+      if (!slot) {
+        $('s-assist-note').textContent = 'No time in the next five working days when everyone is free.';
+        return;
+      }
+      $('s-start').value = localInput(slot);
+      $('s-end').value = localInput(new Date(slot.getTime() + minutes * 60000));
+      checkClash();
+      paintAssist(res.busy ?? {}, slot, new Date(slot.getTime() + minutes * 60000));
+      $('s-assist-note').textContent = `Moved to ${dayLabel(slot)} at ${clockHM(slot)}: everyone is free.`;
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Could not look up who is free', 'bad');
+    }
+  };
+
   const confirmBtn = host.querySelector('[data-confirm]');
   confirmBtn.onclick = async () => {
     const title = $('s-title').value.trim();
     if (!title) {
       toast('A title is required.', 'bad');
-      $('s-title').focus();
+      $('s-title')?.focus();
       return;
     }
     // An empty or unparsable time falls back to the dialog's own defaults
@@ -7317,8 +7689,9 @@ function scheduleDialog() {
           .value.split(/[,\s]+/)
           .map((x) => x.trim())
           .filter(Boolean),
+        recurrence: recurrence(),
       });
-      toast(`Scheduled: ${title} — ${dayLabel(s)}, ${clockHM(s)}`);
+      toast(`Scheduled: ${title} — ${dayLabel(s)}, ${clockHM(s)}${$('s-rep').value ? ', repeating' : ''}`);
       close();
       await loadMeetings();
       // Repaint both surfaces unconditionally: whichever one the person
@@ -7336,7 +7709,7 @@ function scheduleDialog() {
     }
   };
 
-  setTimeout(() => $('s-title').focus(), 50);
+  setTimeout(() => $('s-title')?.focus(), 50); // the dialog may already be gone
 }
 
 // Inviting somebody, as the several different things that actually means.
@@ -7602,8 +7975,14 @@ function wireHome() {
       document
         .querySelectorAll('[data-home]')
         .forEach((x) => x.classList.toggle('active', x === b));
-      if (state.homeTab === 'calendar') renderCalendar();
-      else if (state.homeTab === 'chat') renderChatSurface();
+      if (state.homeTab === 'calendar') {
+        // What is known draws at once; the server's answer repaints when it
+        // lands, if the calendar is still what is on screen.
+        renderCalendar();
+        loadMeetings().then(() => {
+          if (state.homeTab === 'calendar') renderCalendar();
+        });
+      } else if (state.homeTab === 'chat') renderChatSurface();
       else if (state.homeTab === 'teams') renderTeamsSurface();
       else if (state.homeTab === 'activity') renderActivitySurface();
       else renderHome();

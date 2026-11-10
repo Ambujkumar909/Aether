@@ -243,6 +243,10 @@ export const scheduling = {
   create: (m) => api.post('/api/scheduling/meetings', m),
   update: (id, m) => api.patch(`/api/scheduling/meetings/${encodeURIComponent(id)}`, m),
   cancel: (id) => api.post(`/api/scheduling/meetings/${encodeURIComponent(id)}/cancel`, {}),
+  // One occurrence of a series, by its start (Unix ms).
+  cancelOccurrence: (id, occurrence) => api.post(`/api/scheduling/meetings/${encodeURIComponent(id)}/cancel`, { occurrence }),
+  // The scheduling assistant: when these people are busy, as spans only.
+  freeBusy: (emails, from, to) => api.get('/api/scheduling/freebusy?' + qs({ emails: emails.join(','), from, to })),
   history: () => api.get('/api/scheduling/history'),
   remove: (id) => api.del(`/api/scheduling/meetings/${encodeURIComponent(id)}`),
   respond: (id, response) =>

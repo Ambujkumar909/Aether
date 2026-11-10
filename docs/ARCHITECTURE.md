@@ -5862,3 +5862,91 @@ updater -- hash not checked, size not checked, a non-program applied, a failed
 swap not undone, a dev build updating, a path accepted in the file name, the
 update exit counted as a crash -- each fail exactly the test written for them.
 
+### 6bz. Phase 2, part 1: the calendar -- a week, a series, and who is free
+
+The calendar had a month grid, one day's agenda and the invitations with
+their answers. Three things an organisation needs were missing: a week, a
+meeting that repeats, and a way to find a time that suits the people
+invited.
+
+**A series is one row.** `scheduling/recurrence.go`: a rule (daily, weekly
+on chosen days, monthly, every N, until a date, in the organiser's IANA
+zone) sits on the meeting row, whose `ends_at` is set to the end of the
+series' last occurrence so every window query that asks "what overlaps
+this" finds a series with the index it already uses and no second code
+path. Occurrences are computed on the way out, inside the window asked for
+(`expand`), each a copy of the meeting with its own times and an
+`occurrence` (its start, Unix ms); by id the series itself comes back with
+the first occurrence's times. A two-year daily series is one row, not 730,
+and changing it is one write. The zone matters: a weekly 09:00 in Berlin
+stays 09:00 across the clock change, so the UTC start moves from 08:00 to
+07:00 (`TestWeeklyOccurrencesKeepTheirWallClockAcrossAClockChange`); the
+image carries zone rules (`time/tzdata`) because distroless has none. A
+monthly rule on the 31st takes the last day of shorter months. One
+occurrence is cancelled by recording its start in the rule's skipped list
+(`POST .../cancel` with `{"occurrence"}`), and only a real occurrence is
+accepted; the whole series cancels like any meeting. A room emptying never
+completes a series (the UPDATE keys on an empty rule). An answer to the
+invitation is to the series, as in Teams, and appears once in the
+invitations column, not once per occurrence. Bounds: interval 1-99, until
+within the two-year horizon, at most 1,000 skipped, 800 occurrences per
+series per answer. Not built: a different time or title for one occurrence
+(cancel it and schedule another).
+
+**Who is free.** `GET /api/scheduling/freebusy?emails=&from=&to=` answers,
+per address, the spans they are in a scheduled meeting -- from and to, and
+nothing else: no title, no room, no one else there. A declined invitation
+is not busy. Members only, about addresses the caller names (the
+directory's exact-address reach), at most 20 people and 14 days. The
+schedule dialog asks a moment after typing stops, drops an answer to an
+older question, draws a bar per person over the working day with the
+proposed time marked, and "Find the next free time" steps through five
+working days in half hours (`calendar.js freeSlot`, tested) and moves the
+proposal to the first slot nobody is busy in.
+
+**The week.** Seven day columns over the hours the week uses (never
+narrower than 8-18), events placed by their minutes and sharing the width
+where they overlap (`layoutColumns`), a now line, the day/week switch
+remembered per browser. It scrolls sideways inside its own box on a
+phone; the page never does (layout harness, three widths). Clicking an
+entry opens its detail: join, answer, and for the organiser cancel this
+occurrence or the series, asked twice in the same button rather than in a
+browser prompt.
+
+**Measured.** The list is where a series costs bytes: the row is 668 bytes
+as JSON, and the calendar's eight-month window turns one daily series into
+181 occurrences, 123,275 bytes of JSON, 681 each, because each occurrence
+repeats the title and the invitees. Gzipped as the server does it
+(best speed) it is 3,568 bytes: the repetition compresses 35:1, which is why the wire stays a list of
+occurrences rather than a rule the client expands -- the client's
+calendar code stays a list, and the bytes are the compressor's problem.
+Nine faults planted into the server -- expansion in UTC, the monthly
+overflow unclamped, skipped occurrences listed, the row storing the first
+end instead of the series end, a room emptying completing a series,
+declined invitations counted busy, any time accepted as an occurrence, a
+weekly rule excluding its own first meeting, the list not expanded -- each
+fail their test. The browser harness (`calendar.e2e.mjs`, 34 checks, two
+browsers): the series scheduled from the dialog shows one marked occurrence
+a week, week after week; the invitation appears once and says the rule;
+one occurrence cancelled from the detail disappears for both; the
+assistant shows the invitee busy and moves the proposal past their
+meeting; and at the edge an invitee cannot cancel an occurrence, an
+anonymous caller cannot read free/busy, no CSRF header, 21 people, 15
+days, a yearly rule, a rule excluding its first day and a rule with no end
+are each refused.
+**What the screenshots found that the numbers excused.** The first layout
+run passed 420 checks with the phone's calendar visibly cut off at the
+right edge: the week grid's minimum width had widened its grid column
+(`min-width: auto`) and the whole page with it, and the harness excused
+every wide element inside `.home-main` because `overflow-y: auto` makes
+`overflow-x` auto, which it read as "a scroller's business". Two changes:
+`.cal-col { min-width: 0 }`, and the harness now fails any box whose
+content is wider than it unless the box is a deliberate sideways scroller
+(`overscroll-behavior-x: contain`, a table, code, the meeting strip) or a
+design clip (hidden/clip, ellipsis, the 1px visually-hidden label). Proved
+against a scratch copy of the client with the fix removed: the check fails
+on the phone's week view. It also found a cut-off nobody had seen: the
+Create team sheet's Private/Public choice ran 440px wide on a 390px phone
+(`1fr` tracks cannot shrink below their content, and the hints did not
+wrap); fixed with `minmax(0, 1fr)` and wrapping.
+

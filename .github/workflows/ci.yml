@@ -84,4 +84,4 @@ jobs:
       # running Chrome with --no-sandbox).
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: harnesses
-        run: bash tools/e2e/ci-browser.sh console layout messaging call joinrace reset signup twostep sso
+        run: bash tools/e2e/ci-browser.sh console layout messaging call joinrace reset signup twostep sso calendar

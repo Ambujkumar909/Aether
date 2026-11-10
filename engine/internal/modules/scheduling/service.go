@@ -153,13 +153,21 @@ func (s *Service) Create(ctx context.Context, a Actor, m *Meeting, ip, ua string
 		return nil, err
 	}
 	m.Invitees = normaliseInvitees(m.Invitees, a.Email)
+	if m.Recurrence != nil {
+		if err := m.Recurrence.check(m.StartsAt, m.EndsAt, now); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, err
 	}
-	s.record(ctx, a, "meeting.scheduled", m.Title, ip, ua,
-		fmt.Sprintf("room %s at %s for %d min",
-			m.Room, m.StartsAt.Format(time.RFC3339), m.DurationMinutes()))
+	m.firstOccurrence()
+	detail := fmt.Sprintf("room %s at %s for %d min", m.Room, m.StartsAt.Format(time.RFC3339), m.DurationMinutes())
+	if m.Recurrence != nil {
+		detail += fmt.Sprintf(", %s every %d until %s", m.Recurrence.Freq, m.Recurrence.Interval, m.Recurrence.Until.Format("2006-01-02"))
+	}
+	s.record(ctx, a, "meeting.scheduled", m.Title, ip, ua, detail)
 	return m, nil
 }
 
@@ -179,6 +187,12 @@ func (s *Service) Update(ctx context.Context, a Actor, id string, patch *Meeting
 	m.Category = patch.Category
 	m.StartsAt = patch.StartsAt
 	m.EndsAt = patch.EndsAt
+	// The rule is replaced whole; the occurrences already cancelled stay
+	// cancelled unless the caller says otherwise.
+	if patch.Recurrence != nil && m.Recurrence != nil && patch.Recurrence.Skipped == nil {
+		patch.Recurrence.Skipped = m.Recurrence.Skipped
+	}
+	m.Recurrence = patch.Recurrence
 	if patch.Room != "" {
 		m.Room = patch.Room
 	}
@@ -190,6 +204,11 @@ func (s *Service) Update(ctx context.Context, a Actor, id string, patch *Meeting
 	}
 	if err := validate(m); err != nil {
 		return nil, err
+	}
+	if m.Recurrence != nil {
+		if err := m.Recurrence.check(m.StartsAt, m.EndsAt, time.Now().UTC()); err != nil {
+			return nil, err
+		}
 	}
 	m.UpdatedAt = time.Now().UTC()
 
@@ -215,6 +234,14 @@ func (s *Service) Update(ctx context.Context, a Actor, id string, patch *Meeting
 // Cancel marks a meeting cancelled rather than deleting it, so that the
 // people who had it in their calendar can still see what happened to it.
 func (s *Service) Cancel(ctx context.Context, a Actor, id, ip, ua string) error {
+	return s.CancelOccurrence(ctx, a, id, 0, ip, ua)
+}
+
+// CancelOccurrence cancels one occurrence of a series (occurrence is its
+// start in Unix milliseconds), or the whole meeting when occurrence is 0.
+// The occurrence must be a real one: a made-up time is refused rather than
+// recorded, so the skipped list never grows with noise.
+func (s *Service) CancelOccurrence(ctx context.Context, a Actor, id string, occurrence int64, ip, ua string) error {
 	m, err := s.repo.ByID(ctx, id)
 	if err != nil {
 		return err
@@ -222,8 +249,28 @@ func (s *Service) Cancel(ctx context.Context, a Actor, id, ip, ua string) error 
 	if !s.mayEdit(a, m) {
 		return ErrForbidden
 	}
-	m.Status = StatusCancelled
 	m.UpdatedAt = time.Now().UTC()
+	if occurrence != 0 {
+		at := time.UnixMilli(occurrence).UTC()
+		if m.Recurrence == nil || !m.Recurrence.isOccurrence(m.StartsAt, at) {
+			return ErrNotFound
+		}
+		for _, sk := range m.Recurrence.Skipped {
+			if sk == occurrence {
+				return nil // already cancelled; nothing to record twice
+			}
+		}
+		if len(m.Recurrence.Skipped) >= maxSkipped {
+			return fmt.Errorf("%w: skipped", ErrBadRecurrence)
+		}
+		m.Recurrence.Skipped = append(m.Recurrence.Skipped, occurrence)
+		if err := s.repo.Update(ctx, m); err != nil {
+			return err
+		}
+		s.record(ctx, a, "meeting.cancelled", m.Title, ip, ua, "occurrence at "+at.Format(time.RFC3339))
+		return nil
+	}
+	m.Status = StatusCancelled
 	if err := s.repo.Update(ctx, m); err != nil {
 		return err
 	}
@@ -288,6 +335,18 @@ func (s *Service) List(ctx context.Context, a Actor, f Filter) ([]*Meeting, erro
 	if err != nil {
 		return nil, err
 	}
+	// A series becomes its occurrences inside the window asked for. With no
+	// window, the next year of it: a calendar always asks with one, and
+	// a caller that does not still gets something bounded.
+	from, to := f.From, f.To
+	if to.IsZero() {
+		base := from
+		if base.IsZero() {
+			base = time.Now().UTC()
+		}
+		to = base.Add(365 * 24 * time.Hour)
+	}
+	ms = expand(ms, from, to)
 	s.markLive(ms)
 	return ms, nil
 }
@@ -298,6 +357,7 @@ func (s *Service) ByID(ctx context.Context, a Actor, id string) (*Meeting, error
 	if err != nil {
 		return nil, err
 	}
+	m.firstOccurrence()
 	s.markLive([]*Meeting{m})
 	if a.Admin || m.OrganizerID == a.ID {
 		return m, nil
@@ -312,7 +372,66 @@ func (s *Service) ByID(ctx context.Context, a Actor, id string) (*Meeting, error
 
 // Conflicts reports the actor's own overlapping meetings.
 func (s *Service) Conflicts(ctx context.Context, a Actor, from, to time.Time, exclude string) ([]*Meeting, error) {
-	return s.repo.Conflicts(ctx, a.Email, from, to, exclude)
+	ms, err := s.repo.Conflicts(ctx, a.Email, from, to, exclude)
+	if err != nil {
+		return nil, err
+	}
+	return expand(ms, from, to), nil
+}
+
+// Scheduling-assistant bounds: how many people one question may ask about,
+// and how wide a window. Enough for a meeting's invitee list and a fortnight.
+const (
+	MaxFreeBusyPeople = 20
+	MaxFreeBusyWindow = 14 * 24 * time.Hour
+)
+
+// Busy is a span somebody is in a meeting, and only that: no title, no room,
+// no one else who is there. Free/busy is what a colleague may know about a
+// colleague's calendar; the rest is not theirs to see.
+type Busy struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
+}
+
+// FreeBusy answers, for each address, when they are busy inside the window.
+// For members only (the handler guards), about exact addresses the caller
+// named -- the same reach as the directory's exact-address lookup, and the
+// answer is spans without any detail.
+func (s *Service) FreeBusy(ctx context.Context, a Actor, emails []string, from, to time.Time) (map[string][]Busy, error) {
+	if !to.After(from) || to.Sub(from) > MaxFreeBusyWindow || len(emails) > MaxFreeBusyPeople {
+		return nil, ErrBadTimeRange
+	}
+	out := map[string][]Busy{}
+	for _, e := range emails {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if _, done := out[e]; done {
+			continue
+		}
+		ms, err := s.repo.Busy(ctx, e, from, to)
+		if err != nil {
+			return nil, err
+		}
+		spans := []Busy{}
+		for _, m := range expand(ms, from, to) {
+			// Declined is not busy.
+			declined := false
+			for _, inv := range m.Invitees {
+				if strings.EqualFold(inv.Email, e) && inv.Response == RespDeclined {
+					declined = true
+				}
+			}
+			if declined {
+				continue
+			}
+			spans = append(spans, Busy{From: m.StartsAt, To: m.EndsAt})
+		}
+		out[e] = spans
+	}
+	return out, nil
 }
 
 func (s *Service) mayEdit(a Actor, m *Meeting) bool {

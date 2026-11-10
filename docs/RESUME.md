@@ -46,7 +46,13 @@ because job logs need a login).
    today, A/B measured -- next: compare the SFU's transport-cc feedback in a
    passing and a failing run); Chrome rarely wedges a newcomer's subscriber
    under DevTools emulation (joinrace retries that exact signature once).
-4. Then Phase 2, the security phase (threat model, pentest), Phase 4.
+4. Phase 2 is under way: the calendar (week view, recurring meetings, who is
+   free) is DONE 2026-11-10 (ARCHITECTURE 6bz; `tools/e2e/calendar.e2e.mjs`,
+   34 checks; layout harness covers the week grid and the schedule dialog).
+   **Next in Phase 2: web push and a service worker**, then Aether's own
+   sound set, meeting recap, keyboard shortcuts, out of office and
+   notification settings, server-side speaker selection, data export and
+   deletion. Then the security phase (threat model, pentest), Phase 4.
 
 **Running things (changed today):** both runners start Mailpit (a real
 SMTP server, `tools/e2e/mailpit.sh`) and turn email on; the native runner
@@ -243,10 +249,11 @@ feature, but everything seen or heard is Aether's own.
   DevTools emulation (joinrace retries that signature once). Email
   verification on sign-up is done (6by).
 - **Phase 2, what an organization needs to switch:** calendar day/week/month,
-  recurring meetings, RSVP, scheduling assistant; web push and a service
-  worker; Aether's own sound set; meeting recap; keyboard shortcuts; out of
-  office and notification settings; server-side speaker selection; data
-  export and deletion.
+  recurring meetings, RSVP, scheduling assistant (DONE 2026-11-10,
+  ARCHITECTURE 6bz; not done: editing one occurrence's time or title); web
+  push and a service worker; Aether's own sound set; meeting recap; keyboard
+  shortcuts; out of office and notification settings; server-side speaker
+  selection; data export and deletion.
 - **Security phase:** threat model, hardening review, penetration test of the
   finished build.
 - **Phase 3, full parity** (after launch) and **Phase 4, 50,000 users**
