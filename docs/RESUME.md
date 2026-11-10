@@ -47,7 +47,7 @@ because job logs need a login).
    passing and a failing run); Chrome rarely wedges a newcomer's subscriber
    under DevTools emulation (joinrace retries that exact signature once).
 4. Phase 2 is under way: the calendar (week view, recurring meetings, who is
-   free) is DONE 2026-11-10 (ARCHITECTURE 6bz; `tools/e2e/calendar.e2e.mjs`,
+   free) is DONE 2026-11-10, commit `07e16ce` (ARCHITECTURE 6bz; `tools/e2e/calendar.e2e.mjs`,
    34 checks; layout harness covers the week grid and the schedule dialog).
    **Next in Phase 2: web push and a service worker**, then Aether's own
    sound set, meeting recap, keyboard shortcuts, out of office and
