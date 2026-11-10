@@ -5,8 +5,7 @@
 **Phase 2 is under way; Phase 1 is complete.** Done on 2026-11-10, each
 with CI green: the calendar (week view, recurring meetings, who is free)
 `07e16ce`; web push notifications `3c021c1`; Aether's own sound set
-`ec3a3df`; the meeting recap `136f900`; keyboard shortcuts (the latest
-commit on main). All are in ARCHITECTURE 6bz, each with its measurement
+`ec3a3df`; the meeting recap `136f900`; keyboard shortcuts `ff8c42c` (CI green). All are in ARCHITECTURE 6bz, each with its measurement
 and its harness (`calendar`, `push`, `sounds`, `recap`, `shortcuts`
 e2e, all in the CI list). **Next: out of office and notification settings**,
 then server-side speaker selection, data export and deletion; then the
