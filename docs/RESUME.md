@@ -49,10 +49,14 @@ because job logs need a login).
 4. Phase 2 is under way: the calendar (week view, recurring meetings, who is
    free) is DONE 2026-11-10, commit `07e16ce` (ARCHITECTURE 6bz; `tools/e2e/calendar.e2e.mjs`,
    34 checks; layout harness covers the week grid and the schedule dialog).
-   **Next in Phase 2: web push and a service worker**, then Aether's own
-   sound set, meeting recap, keyboard shortcuts, out of office and
-   notification settings, server-side speaker selection, data export and
-   deletion. Then the security phase (threat model, pentest), Phase 4.
+   Web push and a service worker: DONE 2026-11-10 (ARCHITECTURE 6bz, "Being
+   told while Aether is closed"; `tools/e2e/push.e2e.mjs`, 31 checks, with
+   `tools/e2e/fakepush.mjs` started by both runners). **Next in Phase 2:
+   Aether's own sound set**, then meeting recap, keyboard shortcuts, out of
+   office and notification settings, server-side speaker selection, data
+   export and deletion. Owner's rule (2026-11-10): never enable any monetary
+   subscription, billing or paid-plan feature; browser push subscriptions
+   are not that and are wanted. Then the security phase (threat model, pentest), Phase 4.
 
 **Running things (changed today):** both runners start Mailpit (a real
 SMTP server, `tools/e2e/mailpit.sh`) and turn email on; the native runner

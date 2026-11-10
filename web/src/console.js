@@ -5,6 +5,7 @@
 // makes a fifty-row audit table readable instead of a scrolling slit.
 
 import { session, users, audit, settings, twoStep, api, ROLES, ApiError } from './api.js';
+import { pushNoticeState, setPushOff } from './push.js';
 
 const esc = (s) =>
   String(s ?? '').replace(
@@ -573,6 +574,11 @@ async function renderAccount() {
                 <pre class="ts-codes mono" id="ts-codes-list"></pre>
               </div>`}
        </div>` : ''}
+       <div class="card" id="push-card">
+         <h3>Notifications when Aether is closed</h3>
+         <p class="hint" id="push-hint">Checking this browser…</p>
+         <button class="btn" id="push-toggle" hidden></button>
+       </div>
        <div class="card">
          <h3>Password</h3>
          <label class="field"><span>Current password</span>
@@ -629,6 +635,32 @@ async function renderAccount() {
       fail(e);
     }
   });
+
+  // Push notices for this browser: what the browser says, and a switch.
+  const paintPush = async () => {
+    const st = await pushNoticeState();
+    const hint = document.getElementById('push-hint');
+    const btn = document.getElementById('push-toggle');
+    if (!hint || !btn) return;
+    const words = {
+      unsupported: 'This browser cannot receive notifications while Aether is closed.',
+      denied: 'This browser has blocked notifications for Aether. Allow them in the browser’s site settings to turn this on.',
+      off: 'Off for this browser. Messages sent to you and calls will not reach this device while Aether is closed.',
+      on: 'On. A direct message, a mention, an urgent message or a call reaches this device even with Aether closed. Nothing else does, and the words are encrypted for this browser alone.',
+      ask: 'Not set up. Turn it on and the browser will ask once.',
+    };
+    hint.textContent = words[st] ?? '';
+    btn.hidden = st === 'unsupported' || st === 'denied';
+    btn.textContent = st === 'on' ? 'Turn off for this browser' : 'Turn on for this browser';
+    btn.className = st === 'on' ? 'btn' : 'btn btn-primary';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await setPushOff(st === 'on');
+      btn.disabled = false;
+      paintPush();
+    };
+  };
+  paintPush();
 
   document.getElementById('pw-save').onclick = async () => {
     const cur = document.getElementById('pw-cur').value;

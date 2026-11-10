@@ -27,6 +27,7 @@ import (
 	"github.com/aether-rtc/aether/internal/modules/control"
 	"github.com/aether-rtc/aether/internal/modules/identity"
 	"github.com/aether-rtc/aether/internal/modules/messaging"
+	"github.com/aether-rtc/aether/internal/modules/notify"
 	"github.com/aether-rtc/aether/internal/modules/scheduling"
 	"github.com/aether-rtc/aether/internal/modules/settings"
 	"github.com/aether-rtc/aether/internal/platform/backup"
@@ -35,6 +36,7 @@ import (
 	"github.com/aether-rtc/aether/internal/platform/mail"
 	"github.com/aether-rtc/aether/internal/platform/oidc"
 	"github.com/aether-rtc/aether/internal/platform/seal"
+	"github.com/aether-rtc/aether/internal/platform/webpush"
 	"github.com/aether-rtc/aether/internal/relay"
 	"github.com/aether-rtc/aether/internal/room"
 	"github.com/aether-rtc/aether/internal/sfu"
@@ -120,6 +122,8 @@ func main() {
 	ssoName := flag.String("sso-name", "your organisation", "single sign-on: the name on the sign-in button")
 	ssoDomains := flag.String("sso-domains", "",
 		"single sign-on: comma-separated email domains allowed to sign in this way (default: the organisation's domains setting)")
+	pushContact := flag.String("push-contact", "",
+		"how a browser's push service may reach the operator (mailto:ops@example.com); default: the public URL")
 	desktopDir := flag.String("desktop-dir", "",
 		"serve the Windows app and its update manifest from this directory at /desktop/ (the image sets it; empty: off)")
 	sealKey := flag.String("seal-key", "",
@@ -451,6 +455,28 @@ func main() {
 		log.Error("seal key", "err", err)
 		os.Exit(1)
 	}
+	// Push notifications (modules/notify). The VAPID key is derived from the
+	// same key file under its own label, so there is one secret to keep and
+	// one the backups already carry; losing it means browsers subscribe
+	// again, nothing worse.
+	var notifyModule *notify.Module
+	{
+		pushKey, err := webpush.KeyFromSeed(sealKeyBytes)
+		if err != nil {
+			log.Error("push key", "err", err)
+			os.Exit(1)
+		}
+		contact := *pushContact
+		if contact == "" && linkBase != "" {
+			contact = linkBase
+		}
+		if contact == "" {
+			log.Info("push: off (no -public-url and no -push-contact): browsers are not notified while Aether is closed")
+			pushKey = nil
+		}
+		notifyModule = notify.NewModule(db, identityModule, log, pushKey, contact)
+		messagingModule.Service.UseNotifier(notifyModule.Service)
+	}
 	// Outgoing email, through whatever SMTP server the operator names.
 	var mailQueue *mail.Queue
 	switch {
@@ -479,7 +505,7 @@ func main() {
 
 	k := modular.New()
 	if err := k.Register(auditModule, identityModule, settingsModule,
-		schedulingModule, messagingModule, controlModule, rooms, media, gw); err != nil {
+		schedulingModule, messagingModule, notifyModule, controlModule, rooms, media, gw); err != nil {
 		log.Error("module registration failed", "err", err)
 		os.Exit(1)
 	}
@@ -545,6 +571,7 @@ func main() {
 
 	schedulingModule.Routes(mux)
 	messagingModule.Routes(mux)
+	notifyModule.Routes(mux)
 
 	// The TURN relay, and the client config that points at it. Started here,
 	// after the kernel, because it is not a module -- it owns OS listeners

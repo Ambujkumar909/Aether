@@ -63,6 +63,7 @@ import {
   visibleLines,
 } from './captions.js';
 import { directory, messaging, qna, notes, transcript as transcriptApi } from './api.js';
+import { initPush } from './push.js';
 import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, loadSettings as loadFx, saveSettings as saveFx, normalize as normalizeFx, needsPipeline as fxNeedsPipeline, listImages as fxListImages, addImage as fxAddImage, removeImage as fxRemoveImage, loadSegmenter } from './effects.js';
 import { quantize as togQuantize, encodeMask as togEncode, MASK_W as TOG_W, MASK_H as TOG_H, MAX_MASK_BYTES as TOG_MAX, encodeSet as encodeTogSet, encodeOutline as encodeTogOutline, decodeTogether, seats as togSeats, SCENES as TOG_SCENES, PORTRAIT as TOG_PORTRAIT } from './together.js';
 import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as recBanner, elapsed as recElapsed, pickMime, ChunkSink, fileName as recFileName, WHAT as REC } from './recording.js';
@@ -7866,6 +7867,16 @@ function joinDialog() {
 // Boot
 // ---------------------------------------------------------------------------
 
+// What a tapped notice asks for, when a window was already open: a chat,
+// or a call to join (push.js hands these over from the service worker).
+function routeNotice(u) {
+  if (u.searchParams.get('chat')) {
+    openConversationAt(u.searchParams.get('chat'), u.searchParams.get('msg') || '').catch(() => {});
+  } else if (u.searchParams.get('room')) {
+    location.href = u.pathname + u.search;
+  }
+}
+
 async function enterHome() {
   const u = session.user;
   // Set with its tone alongside the other fixed avatars, above. Keyed on the
@@ -7894,6 +7905,9 @@ async function enterHome() {
   });
   show('home');
   renderTitleBar();
+  // Notices while this browser has no Aether open (push.js below): the
+  // desktop shell has its own tray and ringing, so only the browser.
+  if (!inDesktopShell()) initPush(routeNotice);
   // Both awaited before the first render, because the home page draws from
   // both: meetings for the hero and the agenda, conversations for People.
   // Rendering first and filling in afterwards makes the page visibly reflow

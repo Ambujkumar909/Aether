@@ -5950,3 +5950,57 @@ Create team sheet's Private/Public choice ran 440px wide on a 390px phone
 (`1fr` tracks cannot shrink below their content, and the hints did not
 wrap); fixed with `minmax(0, 1fr)` and wrapping.
 
+**Being told while Aether is closed.** A person with no Aether open misses
+a direct message and a call; a person with a socket open does not, the
+socket tells them. So push goes only to members with no socket at all
+(`messaging.notifyAbsent`, from the new-message fan-out, never from an edit
+or a reaction): a direct message always, a group or channel message only
+when they are mentioned or it is urgent, never for a conversation they
+muted, never the sender; a ring goes as an urgent notice whose tap joins the
+call. The sender is `internal/platform/webpush`, standard library only:
+ECDH on P-256, HKDF and AES-128-GCM exactly as RFC 8291 lays them out (its
+Appendix A example encrypts byte for byte), and a VAPID token signed ES256
+(RFC 8292) with a key derived from the sealing key file under its own label,
+so the deployment keeps one secret and the backups already carry it. The
+browser's push service sees ciphertext and a token; the application learns
+nothing from it but accepted or gone. `internal/modules/notify` keeps each
+browser's subscription bound to the sign-in session that made it and reads
+them through a join on live sessions, so a revoked or expired sign-in's
+device hears nothing from that moment, not from the next purge. Ten devices
+per account; a queue of 1,024 notices that drops and counts rather than
+grows; a 404 or 410 forgets the subscription at once and five refusals in a
+row drop it. The client (`web/sw.js`, `web/src/push.js`) registers a worker
+that does nothing but show the notice and route a tap -- no fetch handler,
+no cache -- subscribes once permission exists (asked at a ring or a chat,
+where the reason is visible), and offers a switch per browser in the
+console's account page. The desktop shell does not take part: it has its own
+tray and ringing.
+
+**Measured.** One notice -- a title, a 19-character line, where a tap goes
+and a tag, 108 bytes of JSON -- is 211 bytes on the wire to the push service
+(an 86-byte header carrying the salt, the record size and the sender's
+ephemeral key, the 16-byte tag, the one-byte delimiter) under an
+Authorization header of 329 characters; with the request line and the other
+headers the request is near 800 bytes, so the useful share is about 13%. A
+push is one HTTP request to a third party per notice per device, and there
+is nothing to coalesce across: the headers are the protocol's, the body is
+as small as the words. Headless Chrome has no push service, so the browser
+harness (`push.e2e.mjs`, 31 checks) makes subscriber keys itself, subscribes
+over REST, and decrypts what the server posted to a fake push service
+(`fakepush.mjs`, plain HTTP on the loopback, the only place an http endpoint
+is accepted): the direct message arrives for the laptop and the phone with
+the headers a push service insists on and decrypts to the sender, the words
+and the chat; a plain group message sends nothing and an urgent one goes
+with high urgency and a one-minute life; a device on a revoked session hears
+nothing; a service answering 410 gets no further posts; and anonymous, no
+CSRF, a short key, plain http off the loopback, the eleventh device and
+somebody else's endpoint on unsubscribe are each refused. Unit tests cover
+the RFC vector, a fresh round trip, the token, the status mapping, the
+session join, the bounds, and that only absent members are told.
+The layout audit, run after the push harness on the same database, also
+found a tap target the earlier runs could not: the suggested-reply chips
+above the composer are drawn only when the other person wrote last, which
+the push harness arranges, and they were 31px tall on a phone. Now 44px
+under a coarse pointer. A screen's controls depend on its data; the audit
+runs after the harnesses that make the data.
+

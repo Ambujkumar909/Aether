@@ -287,6 +287,13 @@ export const transcript = {
 
 // The people directory. Available to anyone signed in, because a directory
 // only administrators can search is a directory nobody can use.
+// Push notifications while Aether is closed (engine modules/notify).
+export const push = {
+  key: () => api.get('/api/notify/push/key'),
+  subscribe: (sub) => api.post('/api/notify/push/subscribe', sub),
+  unsubscribe: (endpoint) => api.post('/api/notify/push/unsubscribe', { endpoint }),
+};
+
 export const directory = {
   search: (q = '', limit = 20) => api.get('/api/identity/directory?' + qs({ q, limit })),
 };

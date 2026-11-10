@@ -805,6 +805,21 @@ var migrations = []migration{
 	{"0071_scheduling_recurrence",
 		`ALTER TABLE scheduling_meetings
 		 ADD COLUMN recurrence TEXT NOT NULL DEFAULT ''`},
+	// A browser's push subscription, bound to the session that made it, so
+	// signing out there ends the notices there (modules/notify).
+	{"0072_notify_subscriptions", `
+		CREATE TABLE IF NOT EXISTS notify_subscriptions (
+			id         TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL REFERENCES identity_users(id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL REFERENCES identity_sessions(id) ON DELETE CASCADE,
+			endpoint   TEXT NOT NULL UNIQUE,
+			p256dh     TEXT NOT NULL,
+			auth       TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			fails      INTEGER NOT NULL DEFAULT 0
+		)`},
+	{"0073_notify_subscriptions_user_idx",
+		`CREATE INDEX IF NOT EXISTS notify_subscriptions_user ON notify_subscriptions(user_id)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

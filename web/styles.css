@@ -6148,6 +6148,10 @@ body.rail-collapsed .rail {
   background: var(--surface); border: 1px solid var(--line); color: var(--ink);
 }
 .suggest-chip:hover { border-color: var(--brand); color: var(--brand); }
+/* On a phone the suggested replies are tap targets: 44px, like every other
+   control (found by the layout audit once a thread had the other person's
+   message last, which is when the chips appear). */
+@media (pointer: coarse) { .suggest-chip { min-height: 44px; min-width: 44px; padding-top: 10px; padding-bottom: 10px; } }
 .conv-preview .draft { color: var(--danger); font-style: italic; }
 .pill-f.density { margin-left: auto; padding: 5px 8px; }
 

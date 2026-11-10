@@ -142,6 +142,27 @@ console's user list; that ends every session the account has, and the person
 sets it up again after signing in with the password. Secrets are stored
 sealed with /data/aether.key (see Backups).
 
+## Notifications when the browser is closed
+
+The server sends Web Push notifications to browsers that allowed them: a
+direct message, a mention, an urgent message, or a call reaches a phone or
+laptop with Aether closed. Nothing else does. The words are encrypted for
+that one browser (RFC 8291); the browser's push service carries only
+ciphertext. People turn it on or off per browser in the console's account
+page; signing out of a browser ends its notices.
+
+Nothing to set up: the key is derived from the server's sealing key
+(`/data/aether.key`, already in backups). Push services may want a way to
+reach the operator; by default the public URL is given. To name an address
+instead:
+
+```
+AETHER_PUSH_CONTACT=mailto:ops@example.com
+```
+
+The desktop app does not use push: it has its own notification-area
+ringing.
+
 ## Windows app
 
 The image carries the Windows app and serves it at

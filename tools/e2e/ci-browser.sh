@@ -20,8 +20,12 @@ MAIL=(-smtp-addr 127.0.0.1:1025 -smtp-from noreply@aether.test -smtp-user aether
 export AETHER_ADMIN_EMAIL=admin@ci.e2e.test AETHER_ADMIN_PASSWORD=${MAIL[-1]}
 # The organisation's identity provider, faked (tools/e2e/fakeidp.mjs).
 node tools/e2e/fakeidp.mjs 9460 >"$WORK/idp.log" 2>&1 &
+# A push service, faked (tools/e2e/fakepush.mjs): where the server posts notices.
+node tools/e2e/fakepush.mjs 9470 >"$WORK/push.log" 2>&1 &
+fpush=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:9470/health >/dev/null && break; sleep 0.25; done
 idp=$!
-trap 'kill $idp 2>/dev/null' EXIT
+trap 'kill $idp $fpush 2>/dev/null' EXIT
 for _ in $(seq 1 40); do curl -sf http://127.0.0.1:9460/keys >/dev/null && break; sleep 0.25; done
 for n in "$@"; do
   "$BIN" -addr :9443 -tls -secure-cookies -db "$WORK/e2e.db" -cert "$WORK/cert.pem" -key "$WORK/key.pem" \

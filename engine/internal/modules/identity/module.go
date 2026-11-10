@@ -117,6 +117,14 @@ func (m *Module) ActorOf(r *http.Request) (string, string) {
 
 // IsAdmin lets a module widen a query for an administrator without knowing
 // what a role is.
+// SessionOf is the id of the session behind the request, or "".
+func (m *Module) SessionOf(r *http.Request) string {
+	if s := SessionFrom(r.Context()); s != nil {
+		return s.ID
+	}
+	return ""
+}
+
 func (m *Module) IsAdmin(r *http.Request) bool {
 	u := UserFrom(r.Context())
 	return u != nil && u.Role == RoleAdmin

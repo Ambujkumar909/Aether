@@ -1386,6 +1386,24 @@ func (r *SQLRepository) MemberOf(ctx context.Context, convID, userID string) (*M
 }
 
 // MemberIDs is who to push to: ids only, whatever the size of the channel.
+func (r *SQLRepository) MutedIDs(ctx context.Context, convID string) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT user_id FROM messaging_members WHERE conversation_id=? AND muted=1`, convID)
+	if err != nil {
+		return nil, fmt.Errorf("muted ids: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func (r *SQLRepository) MemberIDs(ctx context.Context, convID string) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT user_id FROM messaging_members WHERE conversation_id=?`, convID)

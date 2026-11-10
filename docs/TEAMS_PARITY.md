@@ -76,6 +76,7 @@ ecosystem.
 | Filters (unread, meeting chats, channels, groups, favourites, muted) | Built | |
 | Open chat in new window | Built | Web; bare popup in the shell |
 | Desktop notifications, taskbar/tray badge, ring flash | Built | Windows toasts from the shell; toast rendering not observed headless |
+| Push notifications while the browser is closed | Built | Web Push, stdlib RFC 8291 + VAPID; a direct message, a mention, an urgent message, a call; per sign-in session, off when signed out; a switch in the console (ARCHITECTURE 6bz) |
 | Activity feed: mentions, replies, reactions, team adds; unread badge; filters; mark all read | Built | §6bq; grouped reactions and day sections, pushed live; missed calls and file shares not in the feed yet |
 | Translate, immersive reader, AI rewrite/Copilot | Not built | Needs an external model service; out of scope for a self-hosted build |
 | GIF/sticker galleries | Not built | External catalogue (Giphy); emoji picker and images cover it |

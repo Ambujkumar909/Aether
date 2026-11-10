@@ -396,6 +396,9 @@ type Repository interface {
 	RemoveMember(ctx context.Context, convID, userID string) error
 	MemberOf(ctx context.Context, convID, userID string) (*Member, error)
 	MemberIDs(ctx context.Context, convID string) ([]string, error)
+	// MutedIDs are the members who muted this conversation: no notice
+	// reaches them for it.
+	MutedIDs(ctx context.Context, convID string) (map[string]bool, error)
 	MembersPage(ctx context.Context, convID string, offset, limit int) ([]Member, int, error)
 	PromoteOldest(ctx context.Context, convID string) error
 	UpdateConversation(ctx context.Context, convID, title, topic string) error
@@ -434,4 +437,11 @@ type Repository interface {
 type Directory interface {
 	LookupByEmail(ctx context.Context, email string) (id, name string, err error)
 	LookupByID(ctx context.Context, id string) (email, name string, err error)
+}
+
+// Notifier reaches a person with no socket open (modules/notify, over Web
+// Push). Injected by main so this module does not import it. Nil means
+// nobody is reached that way.
+type Notifier interface {
+	Notify(userID, title, body, url, tag string, urgent bool)
 }

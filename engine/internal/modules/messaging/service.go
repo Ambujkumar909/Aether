@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +36,9 @@ type Service struct {
 	typingGate *typingGate
 
 	files FileStore // nil until UseFiles; uploads are refused without it
+	// notifier reaches members with no socket open (UseNotifier); nil
+	// means they are not reached.
+	notifier Notifier
 	// MayMessage reports whether one address may open a conversation with
 	// another. Injected from identity, which owns the organisation policy, so
 	// this module does not import it. Nil means no restriction, which is the
@@ -375,6 +379,48 @@ func (s *Service) pushOnce(ctx context.Context, a Actor, convID, messageID strin
 	}
 	for _, id := range ids {
 		s.hub.PushMessage(id, m)
+	}
+}
+
+// notifyAbsent sends a push notice to members who have no socket open at
+// all -- the socket is where a present person hears about it -- for a
+// direct message, a mention, or an urgent message, and never for a muted
+// conversation. The sender is not told about their own message.
+func (s *Service) notifyAbsent(ctx context.Context, convID string, m *Message, ids []string) {
+	if s.notifier == nil || m == nil {
+		return
+	}
+	conv, err := s.repo.ConversationByID(ctx, convID)
+	if err != nil || conv == nil {
+		return
+	}
+	muted, _ := s.repo.MutedIDs(ctx, convID)
+	mentioned := map[string]bool{}
+	for _, id := range m.Mentions {
+		mentioned[id] = true
+	}
+	for _, id := range ids {
+		if id == m.SenderID || muted[id] || s.hub.Connected(id) {
+			continue
+		}
+		if conv.Kind != KindDirect && !mentioned[id] && m.Priority != "urgent" {
+			continue
+		}
+		title := m.SenderName
+		if conv.Kind != KindDirect && conv.Title != "" {
+			title = m.SenderName + " in " + conv.Title
+		}
+		body := m.Body
+		if body == "" && len(m.Attachments) > 0 {
+			body = "Sent a file: " + m.Attachments[0].Name
+		}
+		if m.Priority == "urgent" {
+			body = "URGENT: " + body
+		}
+		if len(body) > 240 {
+			body = body[:240]
+		}
+		s.notifier.Notify(id, title, body, "/?chat="+url.QueryEscape(convID), "conv-"+convID, m.Priority == "urgent")
 	}
 }
 
@@ -824,6 +870,13 @@ func (s *Service) Ring(ctx context.Context, a Actor, targetID, room string) {
 		return
 	}
 	s.hub.PushRing(targetID, a.ID, a.Name, room)
+	// No socket open: the ring must reach them through push, urgently, and
+	// a tap joins the call.
+	if s.notifier != nil && !s.hub.Connected(targetID) {
+		s.notifier.Notify(targetID, a.Name+" is calling", "Tap to answer in Aether.",
+			"/?room="+url.QueryEscape(strings.TrimSuffix(room, "?audio=1"))+"&call=1"+map[bool]string{true: "&audio=1", false: ""}[strings.HasSuffix(room, "?audio=1")],
+			"ring-"+strings.TrimSuffix(room, "?audio=1"), true)
+	}
 
 	// Log it. The client tags an audio call by suffixing the room with
 	// "?audio=1"; the room stored is the clean one so it matches attendance.
@@ -986,6 +1039,9 @@ func (s *Service) fanout(ctx context.Context, convID, senderID, senderDevice str
 		}
 		s.hub.PushMessage(id, m)
 	}
+	// Members with no socket at all hear of a new message by push; an edit
+	// or a reaction (pushOnce) is never worth waking a phone for.
+	s.notifyAbsent(ctx, convID, m, ids)
 }
 
 func (s *Service) mustBeMember(ctx context.Context, convID, userID string) error {
