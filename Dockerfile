@@ -7,9 +7,9 @@
 # The runtime image is distroless: no shell, no package manager, no root. The
 # binary is static (pure-Go SQLite), and the web client is files served as-is.
 
-# The toolchain go.mod pins (toolchain go1.26.10): the image builds with the
+# The toolchain go.mod pins (toolchain go1.26.11): the image builds with the
 # same compiler, patched for every advisory govulncheck knows.
-ARG GO_IMAGE=golang:1.26.10-bookworm
+ARG GO_IMAGE=golang:1.26.11-bookworm
 
 FROM ${GO_IMAGE} AS deps
 WORKDIR /src/engine
