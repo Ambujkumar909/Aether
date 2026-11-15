@@ -332,6 +332,9 @@ export const messaging = {
   ooo: () => api.get('/api/messaging/ooo'),
   setOOO: (message, from = null, until = null) => api.put('/api/messaging/ooo', { message, from, until }),
   clearOOO: () => api.del('/api/messaging/ooo'),
+  // Notification settings: what I am told about, and how loudly.
+  notifyPrefs: () => api.get('/api/messaging/notify'),
+  setNotifyPrefs: (prefs) => api.put('/api/messaging/notify', prefs),
   statuses: (ids) => api.get('/api/messaging/status?' + qs({ ids: ids.join(',') })),
   // Polls: my vote on one, as option indexes (empty withdraws).
   vote: (id, options) => api.post(`/api/messaging/messages/${encodeURIComponent(id)}/vote`, { options }),

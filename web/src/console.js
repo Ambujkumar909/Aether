@@ -592,6 +592,28 @@ async function renderAccount() {
            <button class="btn" id="ooo-off" type="button" hidden>Turn off</button>
          </div>
        </div>
+       <div class="card" id="notify-card">
+         <h3>What you are told about</h3>
+         <p class="hint">Alert is a sound and a banner here, and a notification when Aether is closed. Quiet still counts as unread, or sits in your activity, and makes no noise. Calls and urgent messages always come through.</p>
+         <div class="np-rows">
+           ${[
+             ['direct', 'Direct messages', ['alert', 'quiet']],
+             ['group', 'Groups and channels', ['alert', 'quiet']],
+             ['mention', 'Mentions of you', ['alert', 'quiet']],
+             ['reply', 'Replies to you', ['alert', 'quiet', 'off']],
+             ['reaction', 'Reactions to your messages', ['quiet', 'off']],
+           ]
+             .map(
+               ([k, label, levels]) => `<label class="np-row"><span>${label}</span>
+             <select class="input" id="np-${k}" data-np="${k}" disabled>${levels
+               .map((l) => `<option value="${l}">${{ alert: 'Alert', quiet: k === 'reaction' ? 'In your activity' : 'Quiet', off: 'Off' }[l]}</option>`)
+               .join('')}</select></label>`,
+             )
+             .join('')}
+         </div>
+         <label class="np-preview"><span>Show the words of a message in a notification</span><span class="switch"><input type="checkbox" id="np-preview" disabled /><span></span></span></label>
+         <p class="np-state" id="np-state" role="status">Checking…</p>
+       </div>
        <div class="card" id="sounds-card">
          <h3>Sounds</h3>
          <p class="hint">Aether's own sounds: a ring, a chime for a message, a longer one when you are named, a step when somebody joins or leaves, a note for a raised hand. Do not disturb silences all but your own calls; quiet hours let through what is about you.</p>
@@ -721,6 +743,48 @@ async function renderAccount() {
     }
     paintOOO();
   };
+
+  // Notification settings: the account's, kept on the server. Read before
+  // anything can be changed; every change is sent whole and what the server
+  // stored is what is shown.
+  const npKinds = ['direct', 'group', 'mention', 'reply', 'reaction'];
+  const npShow = (p) => {
+    for (const k of npKinds) {
+      const sel = document.getElementById('np-' + k);
+      if (!sel) return false;
+      sel.value = p[k];
+      sel.disabled = false;
+    }
+    const pv = document.getElementById('np-preview');
+    pv.checked = !!p.preview;
+    pv.disabled = false;
+    // The open chat follows at once; other devices read it with their list.
+    window.dispatchEvent(new CustomEvent('aether:notify-prefs', { detail: p }));
+    return true;
+  };
+  const npRead = async (words) => {
+    const line = document.getElementById('np-state');
+    try {
+      const p = (await messaging.notifyPrefs()).notify;
+      if (npShow(p) && line) line.textContent = words;
+    } catch {
+      if (line) line.textContent = 'Could not read your notification settings.';
+    }
+  };
+  npRead('');
+  const npSave = async () => {
+    const p = { preview: document.getElementById('np-preview').checked };
+    for (const k of npKinds) p[k] = document.getElementById('np-' + k).value;
+    try {
+      npShow((await messaging.setNotifyPrefs(p)).notify);
+      document.getElementById('np-state').textContent = 'Saved.';
+    } catch (e) {
+      fail(e);
+      npRead('Not saved.');
+    }
+  };
+  for (const k of npKinds) document.getElementById('np-' + k).onchange = npSave;
+  document.getElementById('np-preview').onchange = npSave;
 
   // Sounds: the level is this browser's, remembered; the buttons play once.
   const lvl = document.getElementById('sounds-level');

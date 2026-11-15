@@ -1141,6 +1141,48 @@ await section('out of office: a bounded line with a window, shown to peers only 
   ok(!(await B.get(`/api/messaging/status?ids=${A.user.id}`)).json.statuses?.[A.user.id]?.ooo, "and the peer's read agrees");
 });
 
+await section('notification settings: a closed set per kind, mine alone, carried on the list, and off keeps a row out of the feed', async () => {
+  const def = (await A.get('/api/messaging/notify')).json.notify;
+  eq(def, { direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true }, 'with nothing chosen: the defaults');
+  for (const [why, change] of [
+    ['a direct chat cannot be off', { direct: 'off' }],
+    ['a group cannot be off', { group: 'off' }],
+    ['a mention cannot be off', { mention: 'off' }],
+    ['a reaction cannot alert', { reaction: 'alert' }],
+    ['a level nobody defined', { reply: 'loud' }],
+  ]) eq((await A.put('/api/messaging/notify', { ...def, ...change })).status, 400, why);
+  eq((await A.put('/api/messaging/notify', { direct: 'quiet' })).status, 400, 'a setting with fields left out is refused whole');
+  eq((await A.get('/api/messaging/notify')).json.notify, def, 'nothing refused was stored');
+
+  const mine = { direct: 'quiet', group: 'alert', mention: 'alert', reply: 'off', reaction: 'off', preview: false };
+  eq((await A.put('/api/messaging/notify', mine)).json.notify, mine, 'set, and answered with what was stored');
+  eq((await A.get('/api/messaging/notify')).json.notify, mine, 'read back');
+  eq((await A.get('/api/messaging/conversations')).json.notify, mine, 'carried on my conversation list, so every device of mine reads it');
+  eq((await B.get('/api/messaging/notify')).json.notify, def, "another person's are untouched");
+  eq((await B.get('/api/messaging/conversations')).json.notify, def, 'and their list carries theirs');
+
+  const anon = new Client('anon');
+  eq((await anon.get('/api/messaging/notify')).status, 401, 'anonymous read');
+  eq((await anon.put('/api/messaging/notify', def)).status, 401, 'anonymous set');
+  eq((await A.put('/api/messaging/notify', def, { headers: { noCsrf: true, 'X-Aether-CSRF': '' } })).status, 403, 'set without the CSRF header');
+  eq((await A.get('/api/messaging/notify')).json.notify, mine, 'and it changed nothing');
+
+  // The feed: with reactions and replies off, B reacting to and answering
+  // A's message writes A no row; a mention still does.
+  const feed = async () => ((await A.get('/api/messaging/activity?limit=20')).json.items ?? []).map((x) => `${x.kind}:${x.messageId}`);
+  const post = (await A.post(`/api/messaging/conversations/${conv.id}/messages`, { body: 'settings check ' + Date.now() })).json;
+  const before = await feed();
+  eq((await B.post(`/api/messaging/messages/${post.id}/react`, { emoji: '👍', on: true })).status, 204, 'B reacts to it');
+  const answer = (await B.post(`/api/messaging/conversations/${conv.id}/messages`, { body: 'answering', replyTo: post.id })).json;
+  eq(await feed(), before, 'reactions and replies off: neither is in my feed');
+  const named = (await B.post(`/api/messaging/conversations/${conv.id}/messages`, { body: '@A a mention', mentions: [A.user.id] })).json;
+  ok((await feed()).includes(`mention:${named.id}`), 'a mention is always in the feed');
+  eq((await A.put('/api/messaging/notify', def)).json.notify, def, 'back to the defaults');
+  const again = (await B.post(`/api/messaging/conversations/${conv.id}/messages`, { body: 'answering again', replyTo: post.id })).json;
+  ok((await feed()).includes(`reply:${again.id}`), 'and a reply is in the feed again');
+  ok(!(await feed()).includes(`reply:${answer.id}`), 'the one sent while replies were off is not put there afterwards');
+});
+
 await section('presence: departure waits out the grace and carries last seen; appear offline hides arrival, departure and last seen', async () => {
   // C is a peer of A (groups from earlier sections). C connects, then
   // leaves: nothing is said for OfflineGrace (a reconnect must not flicker

@@ -79,6 +79,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/messaging/ooo", p(h.myOOO))
 	mux.Handle("PUT /api/messaging/ooo", p(h.setOOO))
 	mux.Handle("DELETE /api/messaging/ooo", p(h.clearOOO))
+	mux.Handle("GET /api/messaging/notify", p(h.notifyPrefs))
+	mux.Handle("PUT /api/messaging/notify", p(h.setNotifyPrefs))
 	mux.Handle("POST /api/messaging/messages/{id}/vote", p(h.vote))
 	mux.Handle("DELETE /api/messaging/channels/{id}", p(h.deleteChannel))
 	mux.Handle("PUT /api/messaging/blocks/{user}", p(h.block))
@@ -137,7 +139,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	if statuses == nil {
 		statuses = map[string]Status{}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"conversations": cs, "statuses": statuses})
+	// The caller's notification settings ride along: every device reads
+	// this list when it starts and when it reconnects, so each of them
+	// decides its sounds and banners from what is stored.
+	notify, err := h.svc.NotifyPrefsOf(r.Context(), h.actor(r))
+	if err != nil {
+		notify = DefaultNotifyPrefs()
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"conversations": cs, "statuses": statuses, "notify": notify})
 }
 
 func (h *Handler) openDirect(w http.ResponseWriter, r *http.Request) {
@@ -1042,6 +1051,8 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadRequest, "bad_announcement", "an announcement needs a headline of 80 characters or fewer")
 	case errors.Is(err, ErrBadStatus):
 		httpx.Error(w, http.StatusBadRequest, "bad_status", "status must be available, busy, dnd or away, with a note of 120 characters or fewer")
+	case errors.Is(err, ErrBadNotify):
+		httpx.Error(w, http.StatusBadRequest, "bad_notify", "each kind needs a level it allows: direct, group and mention are alert or quiet; reply is alert, quiet or off; reaction is quiet or off")
 	case errors.Is(err, ErrBadOOO):
 		httpx.Error(w, http.StatusBadRequest, "bad_ooo", "an out of office needs a message of 280 characters or fewer, and an end that is after its start and within a year")
 	case errors.Is(err, ErrNotAPoll):

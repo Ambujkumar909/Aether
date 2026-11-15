@@ -838,6 +838,21 @@ var migrations = []migration{
 		`CREATE INDEX IF NOT EXISTS messaging_ooo_starts ON messaging_ooo(starts_at)`},
 	{"0076_messaging_ooo_ends_idx",
 		`CREATE INDEX IF NOT EXISTS messaging_ooo_ends ON messaging_ooo(ends_at)`},
+	// Notification settings: one row per person who has changed something
+	// (messaging/notifyprefs.go). A level is 0 off, 1 quiet, 2 alert; the
+	// checks are the closed set per kind, held by the database as well as
+	// by the service.
+	{"0077_messaging_notify_prefs", `
+		CREATE TABLE IF NOT EXISTS messaging_notify_prefs (
+			user_id    TEXT    PRIMARY KEY,
+			direct     INTEGER NOT NULL CHECK (direct   IN (1, 2)),
+			grp        INTEGER NOT NULL CHECK (grp      IN (1, 2)),
+			mention    INTEGER NOT NULL CHECK (mention  IN (1, 2)),
+			reply      INTEGER NOT NULL CHECK (reply    IN (0, 1, 2)),
+			reaction   INTEGER NOT NULL CHECK (reaction IN (0, 1)),
+			preview    INTEGER NOT NULL CHECK (preview  IN (0, 1)),
+			updated_at INTEGER NOT NULL
+		) WITHOUT ROWID`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

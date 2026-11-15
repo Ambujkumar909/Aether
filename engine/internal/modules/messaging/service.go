@@ -384,10 +384,25 @@ func (s *Service) pushOnce(ctx context.Context, a Actor, convID, messageID strin
 
 // notifyAbsent sends a push notice to members who have no socket open at
 // all -- the socket is where a present person hears about it -- for a
-// direct message, a mention, or an urgent message, and never for a muted
-// conversation. The sender is not told about their own message.
+// direct message, a mention, a reply to something they wrote, or an urgent
+// message, and never for a muted conversation. The sender is not told
+// about their own message.
+//
+// Each person's notification settings then decide (notifyprefs.go): the
+// kind the message falls under for them must be set to alert, unless it is
+// urgent; and with previews off the notice says who and where, not what.
 func (s *Service) notifyAbsent(ctx context.Context, convID string, m *Message, ids []string) {
 	if s.notifier == nil || m == nil {
+		return
+	}
+	// Who is not here at all. Usually nobody, and then nothing below runs.
+	var absent []string
+	for _, id := range ids {
+		if id != m.SenderID && !s.hub.Connected(id) {
+			absent = append(absent, id)
+		}
+	}
+	if len(absent) == 0 {
 		return
 	}
 	conv, err := s.repo.ConversationByID(ctx, convID)
@@ -399,28 +414,46 @@ func (s *Service) notifyAbsent(ctx context.Context, convID string, m *Message, i
 	for _, id := range m.Mentions {
 		mentioned[id] = true
 	}
-	for _, id := range ids {
-		if id == m.SenderID || muted[id] || s.hub.Connected(id) {
+	// The author of the message this one answers is addressed as surely as
+	// someone it names.
+	repliedTo := ""
+	if m.ReplyTo != "" {
+		if q, err := s.repo.MessageByID(ctx, m.ReplyTo); err == nil && !q.System {
+			repliedTo = q.SenderID
+		}
+	}
+	urgent, direct := m.Priority == "urgent", conv.Kind == KindDirect
+	prefs := s.notifyPrefsOf(ctx, absent)
+	for _, id := range absent {
+		if muted[id] {
 			continue
 		}
-		if conv.Kind != KindDirect && !mentioned[id] && m.Priority != "urgent" {
+		named, replied := mentioned[id], repliedTo == id
+		if !direct && !named && !replied && !urgent {
+			continue
+		}
+		p := prefs(id)
+		if !urgent && p.level(named, replied, direct) != NotifyAlert {
 			continue
 		}
 		title := m.SenderName
-		if conv.Kind != KindDirect && conv.Title != "" {
+		if !direct && conv.Title != "" {
 			title = m.SenderName + " in " + conv.Title
 		}
 		body := m.Body
 		if body == "" && len(m.Attachments) > 0 {
 			body = "Sent a file: " + m.Attachments[0].Name
 		}
-		if m.Priority == "urgent" {
+		if !p.Preview {
+			body = "New message"
+		}
+		if urgent {
 			body = "URGENT: " + body
 		}
 		if len(body) > 240 {
 			body = body[:240]
 		}
-		s.notifier.Notify(id, title, body, "/?chat="+url.QueryEscape(convID), "conv-"+convID, m.Priority == "urgent")
+		s.notifier.Notify(id, title, body, "/?chat="+url.QueryEscape(convID), "conv-"+convID, urgent)
 	}
 }
 

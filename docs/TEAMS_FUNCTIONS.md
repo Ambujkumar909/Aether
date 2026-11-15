@@ -154,7 +154,7 @@ chat, settings and status strings.
 | Teams function | Aether | Gap or note |
 | --- | --- | --- |
 | Team as a container; owners and members; public and private; join code; General channel; standard and private channels; threads with replies; pin; topic, picture, rename; announcements; delete | Built | 6bp, 6y, 6ai |
-| **Channel notification level** (all new posts / mentions and replies / off), per channel | Not built | Queued with notification settings |
+| **Channel notification level** (all new posts / mentions and replies / off), per channel | Partial | Mute per conversation; the account-wide kinds of 6cb apply to channels as groups. No middle level per channel |
 | **Channel moderation**: who can start a post, who can reply ("You and moderators can reply") | Not built | |
 | Tags: create and manage, @tag reaches its members, tag-based chat | Not built | Server already expands @everyone; a tag is a named subset |
 | Join requests and approval; pending members | Not built | |
@@ -178,7 +178,7 @@ chat, settings and status strings.
 | Required and optional attendees; location / room | Not built | |
 | Meeting templates; record automatically; allow forwarding | Not built | |
 | Working hours ("Outside your working hours") | Not built | Feeds quiet hours and free/busy |
-| Meeting started notification; meeting chat notifications until I join | Not built | Queued with notification settings |
+| Meeting started notification; meeting chat notifications until I join | Not built | |
 | Calendar file for other calendars (.ics) | Not built | Small; no outside service |
 | Google and Outlook calendar sync, Bookings | N/A | External calendars |
 
@@ -191,9 +191,9 @@ This is the area the next queue item covers, so it is listed in full.
 | Feed of mentions, replies, reactions, team adds; unread badge; filters; mark all read | Built | 6bq |
 | Missed calls and voicemail in the feed; delete from feed; mark one unread | Partial | Missed calls are in the thread, not the feed |
 | Do not disturb; quiet hours; a sound level; push while closed, per browser | Built | 6bz |
-| **Per-kind choice**: chat messages, personal @mentions, channel and team mentions, everyone mentions, replies, likes and reactions — each "banner and feed", "only show in feed" or off | Not built | Queued |
-| **Show message preview** on or off | Not built | Queued; must be honoured where the notice is composed, on the server |
-| **Meeting started**, **meeting chat** (on / until I join or send / off) | Not built | Queued |
+| **Per-kind choice**: chat messages, personal @mentions, channel and team mentions, everyone mentions, replies, likes and reactions — each "banner and feed", "only show in feed" or off | Built | 6cb: direct, group, mention, reply, reaction as alert / quiet / off. Everyone and channel mentions are not separate kinds |
+| **Show message preview** on or off | Built | 6cb; the words are withheld on the server, so a lock screen never has them |
+| **Meeting started**, **meeting chat** (on / until I join or send / off) | Not built | Aether sends no "meeting started" notice to configure |
 | **Missed activity emails**: as soon as possible, every 10 minutes, hourly, every 8 hours, daily, off (`missedActivityEmailDelayOptions`, default `"Hourly"`) | Not built | Mail is already pluggable (any SMTP); a digest needs a bounded scheduler |
 | **Per conversation**: all activity, mentions and replies, or muted (`MentionsAndReplies`, `Mute`), with separate switches for everyone, channel / team and tag mentions | Partial | Mute per conversation is built; the middle level is not |
 | Test notification | Not built | |

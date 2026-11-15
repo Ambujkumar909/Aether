@@ -6199,3 +6199,107 @@ scope). Showing it in a group when a member is away (Teams says "3 or more
 chat members are out of office"; here the member's line and card say it).
 Marking the window busy in "who is free". An out of office set by an
 administrator for someone else.
+
+### 6cb. Phase 2, part 3: notification settings -- a setting only takes away, and is enforced where the notice is made
+
+**What Teams does, read from its package.** The settings area has a choice
+per kind: chat messages, personal @mentions, replies, likes and reactions,
+each "Show in Activity and banner", "Only show in feed" or off; "Show
+message preview"; and a level per conversation (`MentionsAndReplies`,
+`Mute`). The function is kept. The words are Aether's: Alert, Quiet, Off.
+
+**The model.** Five kinds and a switch (`messaging/notifyprefs.go`, table
+`messaging_notify_prefs`, one row per person who has changed something):
+
+| Kind | Levels | Default |
+| --- | --- | --- |
+| Direct messages | alert, quiet | alert |
+| Groups and channels | alert, quiet | alert |
+| Mentions of you | alert, quiet | alert |
+| Replies to you | alert, quiet, off | alert |
+| Reactions to your messages | quiet, off | quiet |
+| Show the words of a message in a notification | on, off | on |
+
+Alert is a sound and a banner when you are here and a push when Aether is
+closed. Quiet counts as unread, or sits in the feed, and makes no noise.
+Off is offered only where there is a feed row to leave out. A message falls
+under exactly one kind for each reader: a mention of them, else a reply to
+something they wrote, else the kind of conversation. So a mention in a chat
+set quiet still alerts, and is silenced only by the mention setting.
+
+Three rules hold it together. **A setting only takes away**: the defaults
+are what Aether did before, and nothing here causes a notice that would not
+otherwise have been sent. **Urgent messages and calls are not settings**:
+they come through whatever is set (do not disturb and quiet hours keep
+their own rules for those). **It is enforced where the notice is made, not
+where it is offered**:
+
+- `notifyAbsent`, the push to a closed Aether. The words of a message are
+  replaced on the server when previews are off ("New message", under the
+  sender's name), which is why this cannot be a client preference: the
+  client that would hide them is not running, and the notice is on a lock
+  screen.
+- `recordActivity`, the feed: off means the row is never written, so
+  turning a kind back on does not bring back what was skipped.
+- the client's `maybeNotify`, for the sound and the banner of someone who
+  is here, through two pure functions (`noticeKind`, `wantsAlert` in
+  sounds.js) that mirror the server's.
+
+The check database-side is the same closed set (`CHECK (reaction IN (0,
+1))` and so on): a level the service would refuse cannot be stored by any
+other path either.
+
+**One behaviour changed.** A reply to something you wrote, in a group, is
+now pushed when Aether is closed, as a mention is. It already alerted a
+person who was present; only the push lagged. It is the one place where
+this work adds a notice, and it has its own setting.
+
+**What it costs: one query, and none in the common case.** The push path
+used to read the conversation and its muted members for every message
+sent. It now asks first who is not connected at all, in memory, and
+returns when nobody is; the two reads and the settings read happen only
+for a message that has someone to wake. The feed asks for settings only
+when a row is a reply or a reaction, once for all the owners in the batch.
+
+**On the wire (tshark, loopback, IPv4; `tools/e2e/measure-notify.mjs`).**
+Settings add no frame to any socket. They are read and written over REST,
+and each device learns them from the conversation list it already fetches
+when it starts and when it reconnects.
+
+| Exchange (alone on its connection) | Body | Frame carrying it | Whole exchange |
+| --- | --- | --- | --- |
+| The conversation list, with the settings in it | 1,031 B, 112 B of it the settings; gzipped 444 B against 392 B without | 1,153 B | 11 frames, 2,016 B |
+| The settings alone (`GET /api/messaging/notify`) | 114 B | 754 B | 11 frames, 1,610 B |
+| Changing them (`PUT`) | 103 B up | 560 B up, 755 B down | 11 frames, 1,735 B |
+
+So carrying the settings on the list costs 52 B on a response that was
+being sent anyway, and fetching them separately would cost 1,610 B to
+deliver 114: 7.1% payload efficiency, the rest being TCP's handshake and
+teardown and some 600 B of response headers. That is the whole argument
+for where they ride. The account page does fetch them alone, once, when it
+opens, because it must show what is stored and not what a list read some
+minutes ago. A change is not pushed to a person's other devices: they
+read it with their next list. The push decision is the server's and is
+right at once; a second device's sounds follow when it reconnects or
+reloads. That gap is real and is the price of adding no frame.
+
+**Proof.** Three Go tests: the closed set per kind and that one person's
+are not another's; the push for every kind, the outranking, urgent, and
+previews (the door code never appears in the notice); the feed for quiet
+and off. Seventeen planted faults, all caught (one rewritten to compile).
+`sounds.test.mjs` covers the client's two functions. `notify.e2e.mjs`, two
+browsers: the card reads the server before a control can be touched, saves
+whole, survives a reload; a recorded banner hook shows nothing for a quiet
+kind while the chat still counts as unread, shows an urgent message, a
+mention, and "New message" with previews off; the card on a phone.
+`push.e2e.mjs` decrypts the notice the fake push service received: none
+for a quiet kind, one for urgent, no words with previews off.
+`messaging.e2e.mjs`: the five refusals, a partial body refused whole, the
+list carrying them, anonymous and no-CSRF, and the feed with replies and
+reactions off.
+
+**Not built.** A level per conversation between everything and muted
+(Teams' "mentions and replies"): mute stays as it is, deliberately silent
+to push. Missed-activity email. A "meeting started" notice (Aether sends
+none to configure). Notify me when a person becomes available. Pushing a
+change to a person's other devices.

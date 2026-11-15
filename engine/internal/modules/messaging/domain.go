@@ -346,6 +346,9 @@ type Repository interface {
 	OOOOf(ctx context.Context, userID string, now time.Time) (OOO, bool, error)
 	OOOActive(ctx context.Context, ids []string, now time.Time) (map[string]OOO, error)
 	OOOCrossed(ctx context.Context, after, upto time.Time) ([]string, error)
+	// Notification settings (notifyprefs.go).
+	SetNotifyPrefs(ctx context.Context, userID string, p NotifyPrefs, now time.Time) error
+	NotifyPrefsFor(ctx context.Context, ids []string) (map[string]NotifyPrefs, error)
 	SetVotes(ctx context.Context, messageID, userID string, options []int, at time.Time) error
 	PollTalliesFor(ctx context.Context, userID string, messageIDs []string) (map[string]*PollTally, error)
 	DeleteConversation(ctx context.Context, convID string) ([]Attachment, error)

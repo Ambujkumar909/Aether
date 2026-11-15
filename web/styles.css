@@ -8309,3 +8309,24 @@ input, textarea, [contenteditable] { caret-color: var(--brand); }
 #ooo-off[hidden] { display: none; }
 .pc-ooo { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 8px 10px; background: var(--surface); border-radius: var(--r-sm); font-size: 13px; line-height: 1.4; color: var(--ink-2); overflow-wrap: anywhere; }
 .pc-ooo svg { flex: 0 0 auto; margin-top: 1px; color: var(--brand); }
+
+/* Notification settings on the account page: a kind and its level per row. */
+.np-rows { display: grid; gap: 8px; margin: 4px 0 12px; }
+.np-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 150px); align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
+.np-row .input { padding: 8px 10px; min-height: 38px; }
+.np-preview { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+/* The same switch as quiet hours. The input is the hit area: 44px square
+   over a 36x20 track, so a thumb finds it (the audit refused an 18px box). */
+.np-preview .switch { position: relative; width: 36px; height: 20px; flex: 0 0 auto; }
+.np-preview .switch input { position: absolute; top: -12px; left: -4px; width: 44px; height: 44px; opacity: 0; margin: 0; cursor: pointer; }
+.np-preview .switch span { position: absolute; inset: 0; border-radius: 10px; background: var(--surface-2); transition: background 140ms ease; }
+.np-preview .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--on-solid); box-shadow: 0 1px 2px var(--scrim-35); transition: transform 140ms cubic-bezier(.2,0,0,1); }
+.np-preview .switch input:checked + span { background: var(--brand); }
+.np-preview .switch input:checked + span::after { transform: translateX(16px); }
+.np-preview .switch input:focus-visible + span { box-shadow: 0 0 0 2px var(--brand-soft); }
+.np-preview .switch input:disabled + span { opacity: .5; }
+.np-state { min-height: 18px; margin: 10px 0 0; font-size: 12.5px; color: var(--ink-3); }
+@media (pointer: coarse) {
+  .np-row .input { min-height: 44px; }
+  .np-preview { min-height: 44px; }
+}

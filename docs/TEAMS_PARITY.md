@@ -48,6 +48,7 @@ ecosystem.
 | Typing indicator | Built | Small conversations only |
 | Presence (online/offline) | Built | Peers only |
 | Availability status + note + expiry; Do not disturb | Built | `OpStatus`; DND silences all but urgent |
+| Notification settings | Built | Per kind: direct messages, groups and channels, mentions, replies (alert, quiet, or off for replies), reactions (in the feed or off), and whether a notification may carry a message's words; on the account, enforced by the server for push and the feed and by the client for sounds and banners; urgent messages and calls always come through (ARCHITECTURE 6cb). A middle level per conversation, missed-activity email, notify-when-available: not built |
 | Out of office | Built | A line of up to 280 characters with an optional window, shown above the message box of anyone who writes, beside the name and on the card, only while it is in effect; set on the account page. No automatic reply is sent: the writer is told before they send (ARCHITECTURE 6ca). A separate message for outsiders, and group chats saying a member is away: not built |
 | Automatic "In a call" / "Presenting" while in a meeting | Built | From the room registry, pushed on join/leave/share; not settable by hand; the calendar sets nothing |
 | Automatic Away after 5 idle minutes; every device idle | Built | Client idle watch → `OpIdle`; server folds devices; a picked Busy/DND/Away stands |

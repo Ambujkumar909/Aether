@@ -154,6 +154,33 @@ try {
   const u = await inboxHas(laptop.name, 1);
   ok(u.length === 1 && u[0].headers.urgency === 'high' && u[0].headers.ttl === '60', `an urgent message is pushed with high urgency and a short life (${u[0]?.headers.urgency}, ${u[0]?.headers.ttl})`);
 
+  // A's notification settings decide the push, and whether the words of a
+  // message leave the server at all.
+  const defaults = (await A.call('GET', '/api/messaging/notify')).body?.notify;
+  ok(defaults?.direct === 'alert' && defaults?.reaction === 'quiet' && defaults?.preview === true, `with nothing chosen the settings are the defaults (${JSON.stringify(defaults)})`);
+  await clearInbox(laptop.name);
+  await clearInbox(phone.name);
+  ok((await A.call('PUT', '/api/messaging/notify', { ...defaults, direct: 'quiet' })).status === 200, 'A sets direct messages quiet');
+  await B.call('POST', `/api/messaging/conversations/${convID}/messages`, { body: 'quiet now?' });
+  await sleep(700);
+  ok((await inbox(laptop.name)).length === 0, 'a direct message to someone who set them quiet sends no notice');
+  await B.call('POST', `/api/messaging/conversations/${convID}/messages`, { body: 'the build server is on fire', priority: 'urgent' });
+  ok((await inboxHas(laptop.name, 1)).length === 1, 'an urgent one still does: urgent is not a setting');
+  await clearInbox(laptop.name);
+  ok((await A.call('PUT', '/api/messaging/notify', { ...defaults, preview: false })).status === 200, 'A turns message previews off');
+  const secret = 'the door code is ' + Math.random().toString(36).slice(2, 8);
+  await B.call('POST', `/api/messaging/conversations/${convID}/messages`, { body: secret });
+  const hidden = await inboxHas(laptop.name, 1);
+  try {
+    const hn = hidden.length ? await decrypt(laptop, hidden[0].body) : {};
+    ok(hn.body === 'New message' && hn.title === (me.body?.displayName || 'E2E B') && !JSON.stringify(hn).includes(secret), `with previews off the notice says who, never what (${JSON.stringify(hn)})`);
+  } catch (e) {
+    ok(false, 'decrypting the previewless notice: ' + e.message);
+  }
+  ok((await A.call('PUT', '/api/messaging/notify', defaults)).status === 200, 'A puts the settings back');
+  await clearInbox(laptop.name);
+  await clearInbox(phone.name);
+
   // A revoked session's device hears nothing more.
   // Subscribe a third device on a second session, then revoke that session
   // (the newest one) from the first.

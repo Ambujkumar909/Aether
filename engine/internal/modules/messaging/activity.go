@@ -264,8 +264,35 @@ func (s *Service) activityForMessage(ctx context.Context, m *Message) {
 	s.recordActivity(ctx, rows)
 }
 
+// wantedActivity leaves out the rows their owners have turned off: a reply
+// or a reaction set to off is not written at all (notifyprefs.go). Mentions
+// and team adds have no off. One query for the owners, and none when no
+// row is of a kind that can be off.
+func (s *Service) wantedActivity(ctx context.Context, rows []activityRow) []activityRow {
+	var owners []string
+	for _, x := range rows {
+		if x.kind == ActivityReply || x.kind == ActivityReaction {
+			owners = append(owners, x.userID)
+		}
+	}
+	if len(owners) == 0 {
+		return rows
+	}
+	prefs := s.notifyPrefsOf(ctx, owners)
+	kept := rows[:0:0]
+	for _, x := range rows {
+		if (x.kind == ActivityReply && prefs(x.userID).Reply == NotifyOff) ||
+			(x.kind == ActivityReaction && prefs(x.userID).Reaction == NotifyOff) {
+			continue
+		}
+		kept = append(kept, x)
+	}
+	return kept
+}
+
 // recordActivity writes rows and pushes each to its person.
 func (s *Service) recordActivity(ctx context.Context, rows []activityRow) {
+	rows = s.wantedActivity(ctx, rows)
 	if len(rows) == 0 {
 		return
 	}

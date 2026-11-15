@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CUES, LEVELS, shouldPlay } from './sounds.js';
+import { CUES, LEVELS, shouldPlay, NOTICE_DEFAULTS, noticeKind, wantsAlert } from './sounds.js';
 
 // The scores themselves: every cue is short, within loudness, in tune with
 // the one motif, and no two cues are the same sequence.
@@ -60,4 +60,26 @@ test('what plays: levels, do not disturb and quiet hours', () => {
   assert.ok(!shouldPlay('join', { quiet: true }));
   // Unknown cues never play.
   assert.ok(!shouldPlay('bell'));
+});
+
+test('notification settings: which setting a message falls under, and that a setting only takes away', () => {
+  // A mention outranks a reply, a reply outranks where it arrived.
+  assert.equal(noticeKind({ mentioned: true, replied: true, direct: true }), 'mention');
+  assert.equal(noticeKind({ replied: true, direct: true }), 'reply');
+  assert.equal(noticeKind({ direct: true }), 'direct');
+  assert.equal(noticeKind({}), 'group');
+  // With nothing chosen, everything that alerted before still does.
+  for (const k of ['direct', 'group', 'mention', 'reply']) assert.ok(wantsAlert(undefined, k), k);
+  assert.ok(wantsAlert({}, 'direct'), 'a setting the server did not send reads as its default');
+  assert.equal(NOTICE_DEFAULTS.reaction, 'quiet');
+  assert.equal(NOTICE_DEFAULTS.preview, true);
+  // Quiet and off are both silence here; the difference is the feed's.
+  const p = { ...NOTICE_DEFAULTS, direct: 'quiet', reply: 'off' };
+  assert.ok(!wantsAlert(p, 'direct'));
+  assert.ok(!wantsAlert(p, 'reply'));
+  assert.ok(wantsAlert(p, 'mention'), 'the others are untouched');
+  assert.ok(wantsAlert(p, 'group'));
+  // Urgent is not a setting.
+  assert.ok(wantsAlert(p, 'direct', true));
+  assert.ok(wantsAlert({ ...p, group: 'quiet' }, 'group', true));
 });

@@ -15,12 +15,20 @@
   list), `tools/e2e/measure-ooo.mjs`, a section in `messaging.e2e.mjs`, the
   status menu and account page in the layout audit.
 
-**Next: notification settings** (per kind: direct, group, mention, reply,
-reaction; message preview; enforced in `notifyAbsent`, `recordActivity` and
-the client's `maybeNotify`). The client half of the decision is already in
-`web/src/sounds.js` (`noticeKind`, `wantsAlert`, tested). Then missed
-activity email, server-side speaker selection, data export and deletion;
-then the security phase and Phase 4 as below.
+- **Notification settings** (ARCHITECTURE 6cb): `messaging/notifyprefs.go`,
+  table `messaging_notify_prefs`, `GET`/`PUT /api/messaging/notify`, carried
+  on the conversation list; enforced in `notifyAbsent` (push, and whether
+  the words leave the server), `recordActivity` (the feed) and the client's
+  `maybeNotify` through `noticeKind`/`wantsAlert` in sounds.js. The card is
+  on the account page. `tools/e2e/notify.e2e.mjs` (in the CI list),
+  `tools/e2e/measure-notify.mjs`, sections in `push.e2e.mjs` and
+  `messaging.e2e.mjs`. A reply to you in a group is now pushed.
+
+**Next, in order:** missed-activity email (the scheduler and SMTP exist;
+Teams' options are in `docs/TEAMS_FUNCTIONS.md`), server-side speaker
+selection, data export and deletion; then the security phase (which should
+include reporting a message or a person to an administrator and a challenge
+before an anonymous join) and Phase 4 as below.
 
 Gotchas from today:
 
@@ -36,6 +44,12 @@ Gotchas from today:
 - Backslashes in a Bash-tool heredoc are eaten (a regex, `
 `, a Windows
   path). Write the script with the Write tool, then run it.
+- CI's `govulncheck` step goes red by itself when a Go patch release fixes
+  an advisory the code can reach (GO-2026-6859 in `net/http`, fixed in
+  1.26.11, did that to the out of office commit). Move three pins together:
+  `toolchain` in `engine/go.mod`, `GO_IMAGE` in the Dockerfile, the version
+  line in `THIRD_PARTY_NOTICES.md` (`tools/notices.sh` regenerates it).
+  `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` runs here.
 - A partial index is not used for a range with a bound parameter unless the
   planner can prove the range implies the index's condition; check the plan.
 

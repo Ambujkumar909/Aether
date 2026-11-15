@@ -76,6 +76,25 @@ export function setSoundLevel(level) {
   } catch {}
 }
 
+// What a person asked to be told about (the account's notification
+// settings, kept on the server and carried on the conversation list). The
+// defaults are what Aether did before there were settings.
+export const NOTICE_DEFAULTS = Object.freeze({ direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true });
+
+// noticeKind names which setting a message falls under for one person: a
+// mention of them first, then a reply to something they wrote, then the
+// kind of conversation it arrived in.
+export function noticeKind({ mentioned = false, replied = false, direct = false } = {}) {
+  return mentioned ? 'mention' : replied ? 'reply' : direct ? 'direct' : 'group';
+}
+
+// wantsAlert says whether a message may make a sound and a banner at all.
+// A setting only ever takes away; an urgent message is not a setting.
+export function wantsAlert(prefs, kind, urgent = false) {
+  if (urgent) return true;
+  return ((prefs && prefs[kind]) || NOTICE_DEFAULTS[kind]) === 'alert';
+}
+
 // shouldPlay decides. `kind` is a CUES key; `about` says whether the cue is
 // about this person (a direct message, a mention, their own call); dnd and
 // quiet come from presence (chat.js).

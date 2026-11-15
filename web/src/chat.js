@@ -16,7 +16,7 @@ import { rankPeople, mergePeople, highlight, createSearch } from './peoplesearch
 import { presenceIcon, presenceLine, agoText, oooActive, oooText, statusLabel as presenceLabel, isAutoStatus as presenceIsAuto } from './presence.js';
 import { createIdleWatch } from './idle.js';
 import { createTypingBoard, createTypingSender } from './typing.js';
-import { shouldPlay, play as playSound, soundLevel } from './sounds.js';
+import { shouldPlay, play as playSound, soundLevel, NOTICE_DEFAULTS, noticeKind, wantsAlert } from './sounds.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -750,6 +750,7 @@ export async function refresh() {
     const res = await messaging.list();
     state.conversations = res.conversations ?? [];
     mergeStatuses(res.statuses);
+    if (res.notify) notice = { ...NOTICE_DEFAULTS, ...res.notify };
     window.dispatchEvent(new CustomEvent('aether:my-status'));
     renderList();
     state.onUnread?.(totalUnread());
@@ -3137,6 +3138,16 @@ export function cue(kind, opts = {}) {
   return playSound(kind);
 }
 
+// The account's notification settings as this device last read them: on
+// the conversation list, and from the account page the moment they are
+// saved there.
+let notice = { ...NOTICE_DEFAULTS };
+if (typeof window !== 'undefined') {
+  window.addEventListener('aether:notify-prefs', (e) => {
+    notice = { ...NOTICE_DEFAULTS, ...(e.detail || {}) };
+  });
+}
+
 export function maybeNotify(m, conv) {
   if (m.system || m.senderId === session.user?.id) return;
   // Do not disturb means exactly that; an urgent message is the one thing
@@ -3155,6 +3166,9 @@ export function maybeNotify(m, conv) {
   const looking = !document.hidden && document.hasFocus() && state.active?.id === m.conversationId && state.threadTab === 'chat';
   if (looking) return;
   if (conv?.muted && m.priority !== 'urgent' && !personal) return;
+  // The account's settings come last: they only ever take away, and an
+  // urgent message is not one of them.
+  if (!wantsAlert(notice, noticeKind({ mentioned, replied, direct: conv?.kind === 'direct' }), m.priority === 'urgent')) return;
   // Heard before it is seen: the chime for a message, the longer one for
   // a message about you.
   cue(personal || m.priority === 'urgent' ? 'mention' : 'message', { about: personal || conv?.kind === 'direct', urgent: m.priority === 'urgent' });
@@ -3164,7 +3178,9 @@ export function maybeNotify(m, conv) {
     : replied
       ? `${m.senderName} replied to you${where ? ' in ' + where : ''}`
       : conv?.display || m.senderName;
-  const body = (m.priority === 'urgent' ? 'URGENT · ' : '') + (plainText(m.body || '') || (m.attachments?.length ? '📎 ' + m.attachments[0].name : ''));
+  // With previews off a banner says who and where, never what.
+  const words = notice.preview === false ? 'New message' : plainText(m.body || '') || (m.attachments?.length ? '📎 ' + m.attachments[0].name : '');
+  const body = (m.priority === 'urgent' ? 'URGENT · ' : '') + words;
   // In the desktop shell the notification is Windows' own, from the shell;
   // the browser's Notification API is for browsers.
   if (typeof window.aetherNotify === 'function') {
@@ -3174,7 +3190,7 @@ export function maybeNotify(m, conv) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
     const n = new Notification(conv?.display || m.senderName, {
-      body: (m.priority === 'urgent' ? 'URGENT · ' : '') + (m.body || (m.attachments?.length ? '📎 ' + m.attachments[0].name : '')),
+      body,
       tag: m.conversationId,
       requireInteraction: m.priority === 'urgent',
     });
