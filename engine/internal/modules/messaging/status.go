@@ -155,6 +155,11 @@ func (s *Service) autoNow() map[string]string {
 func (s *Service) presenceOf(ctx context.Context, id string, st *Status) {
 	seen, _ := s.repo.LastSeenFor(ctx, []string{id})
 	s.decorateWith(id, st, seen)
+	away, _ := s.repo.OOOActive(ctx, []string{id}, time.Now().UTC())
+	st.OOO = nil
+	if o, ok := away[id]; ok {
+		st.OOO = &o
+	}
 }
 
 func (s *Service) decorateWith(id string, st *Status, seen map[string]time.Time) {
@@ -201,6 +206,10 @@ func (s *Service) Statuses(ctx context.Context, a Actor, ids []string) (map[stri
 		return nil, err
 	}
 	now := time.Now().UTC()
+	away, err := s.repo.OOOActive(ctx, ask, now)
+	if err != nil {
+		return nil, err
+	}
 	auto := s.autoNow()
 	out := make(map[string]Status, len(ask))
 	for _, id := range ask {
@@ -212,6 +221,9 @@ func (s *Service) Statuses(ctx context.Context, a Actor, ids []string) (map[stri
 			st = Status{UserID: id, Status: StatusAvailable, UpdatedAt: now}
 		}
 		s.decorateWith(id, &st, seen)
+		if o, ok := away[id]; ok {
+			st.OOO = &o
+		}
 		out[id] = st
 	}
 	return out, nil
@@ -240,28 +252,25 @@ func (s *Service) nudgeCh() chan struct{} {
 // changed -- to their peers and to their own devices, so their own dot
 // moves too. Bounded by the number of people whose state changed since the
 // last reading.
+//
+// An out of office beginning or ending is a change of the same kind, and
+// the loop is where its two edges are noticed: nobody is connected to a
+// window opening at midnight.
 func (s *Service) RunAutoStatus(ctx context.Context, every time.Duration) {
 	var prev map[string]string
+	last := time.Now().UTC()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		now := time.Now().UTC()
 		cur := s.autoNow()
-		for _, id := range autoStatusChanges(prev, cur) {
-			manual, has, _ := s.manualStatus(ctx, id)
-			st, ok := effective(id, manual, has, cur, now)
-			if !ok {
-				// Nothing picked, no longer in a room: available, said out
-				// loud so the dot that turned red turns back.
-				st = Status{UserID: id, Status: StatusAvailable, UpdatedAt: now}
-			}
-			s.presenceOf(ctx, id, &st)
-			if peers, err := s.repo.PeersOf(ctx, id); err == nil {
-				for _, p := range peers {
-					s.pushAuto(p, st)
-				}
-			}
-			s.pushAuto(id, st)
+		changed := autoStatusChanges(prev, cur)
+		if crossed, err := s.repo.OOOCrossed(ctx, last, now); err == nil {
+			last = now // on an error the same stretch is read again next time
+			changed = appendNew(changed, crossed)
+		}
+		for _, id := range changed {
+			s.announceStatus(ctx, id, cur, now)
 		}
 		prev = cur
 		select {
@@ -280,6 +289,24 @@ func (s *Service) pushAuto(to string, st Status) {
 	if s.autoPushed != nil {
 		s.autoPushed(to, st)
 	}
+}
+
+// appendNew adds to ids those of more not already there.
+func appendNew(ids, more []string) []string {
+	if len(more) == 0 {
+		return ids
+	}
+	have := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		have[id] = true
+	}
+	for _, id := range more {
+		if !have[id] {
+			have[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // autoStatusChanges lists the ids whose automatic state differs between

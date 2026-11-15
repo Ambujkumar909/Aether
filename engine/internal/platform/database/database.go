@@ -820,6 +820,24 @@ var migrations = []migration{
 		)`},
 	{"0073_notify_subscriptions_user_idx",
 		`CREATE INDEX IF NOT EXISTS notify_subscriptions_user ON notify_subscriptions(user_id)`},
+	// Out of office: one row per person who has set it, with its window
+	// (messaging/ooo.go). ends_at 0 means until it is turned off. The two
+	// indexes are what the status loop asks every tick: whose window began
+	// or ended since the last one. The second is not partial (WHERE ends_at
+	// > 0) although open-ended rows are never asked for: with the bound a
+	// parameter the planner cannot prove the range implies it, and scans.
+	{"0074_messaging_ooo", `
+		CREATE TABLE IF NOT EXISTS messaging_ooo (
+			user_id    TEXT    PRIMARY KEY,
+			message    TEXT    NOT NULL,
+			starts_at  INTEGER NOT NULL,
+			ends_at    INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL
+		) WITHOUT ROWID`},
+	{"0075_messaging_ooo_starts_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_ooo_starts ON messaging_ooo(starts_at)`},
+	{"0076_messaging_ooo_ends_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_ooo_ends ON messaging_ooo(ends_at)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

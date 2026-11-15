@@ -1099,6 +1099,48 @@ await section('status: mine to set, bounded, pushed to peers, invisible to stran
   await pushB.nextWhere((x) => x.op === Op.Status);
 });
 
+await section('out of office: a bounded line with a window, shown to peers only while it is in effect', async () => {
+  const hour = 3600e3;
+  const at = (ms) => new Date(Date.now() + ms).toISOString();
+  eq((await A.put('/api/messaging/ooo', { message: '   ' })).status, 400, 'no message is refused');
+  eq((await A.put('/api/messaging/ooo', { message: 'x'.repeat(281) })).status, 400, 'a message one over the bound');
+  eq((await A.put('/api/messaging/ooo', { message: 'Away', from: at(2 * hour), until: at(hour) })).status, 400, 'an end before its start');
+  eq((await A.put('/api/messaging/ooo', { message: 'Away', until: at(367 * 24 * hour) })).status, 400, 'an end more than a year ahead');
+  eq((await A.get('/api/messaging/ooo')).json.ooo, null, 'nothing refused was stored');
+
+  // Planned for later: stored, mine to see, and nobody is told.
+  eq((await A.put('/api/messaging/ooo', { message: 'Next week', from: at(24 * hour), until: at(48 * hour) })).status, 200, 'a planned one is accepted');
+  const mine = (await A.get('/api/messaging/ooo')).json.ooo;
+  ok(mine && mine.message === 'Next week' && !mine.active && mine.from && mine.until, `my own read of a planned one (${JSON.stringify(mine)})`);
+  ok(!(await B.get(`/api/messaging/status?ids=${A.user.id}`)).json.statuses?.[A.user.id]?.ooo, 'a peer is not shown a planned one');
+
+  // In effect: pushed to the peer on the status frame, and in both reads.
+  const until = Date.now() + 2 * hour;
+  eq((await A.put('/api/messaging/ooo', { message: 'Back at four. Asha is covering.', until: new Date(until).toISOString() })).status, 200, 'turned on');
+  const f = await pushB.nextWhere((x) => x.op === Op.Status && x.status?.who === A.user.id);
+  eq([f.status.ooo?.message, f.status.ooo?.until], ['Back at four. Asha is covering.', until], 'pushed to the peer with its end');
+  const seen = (await B.get(`/api/messaging/status?ids=${A.user.id}`)).json.statuses?.[A.user.id];
+  ok(seen?.ooo?.message === 'Back at four. Asha is covering.' && !('from' in seen.ooo), `in the peer's read, without the start (${JSON.stringify(seen?.ooo)})`);
+  eq((await B.get('/api/messaging/conversations')).json.statuses?.[A.user.id]?.ooo?.message, 'Back at four. Asha is covering.', 'and on the conversation list');
+  ok((await A.get('/api/messaging/ooo')).json.ooo?.active === true, 'my own read says it is on');
+
+  // Mine alone to read, set and clear.
+  const anon = new Client('anon');
+  eq((await anon.get('/api/messaging/ooo')).status, 401, 'anonymous read');
+  eq((await anon.put('/api/messaging/ooo', { message: 'x' })).status, 401, 'anonymous set');
+  eq((await anon.del('/api/messaging/ooo')).status, 401, 'anonymous clear');
+  eq((await A.put('/api/messaging/ooo', { message: 'x' }, { headers: { noCsrf: true, 'X-Aether-CSRF': '' } })).status, 403, 'set without the CSRF header');
+  eq((await A.del('/api/messaging/ooo', { headers: { noCsrf: true, 'X-Aether-CSRF': '' } })).status, 403, 'clear without the CSRF header');
+  eq((await B.get('/api/messaging/ooo')).json.ooo, null, "another person's is not mine to read: B reads B's own, which is none");
+  eq((await B.del('/api/messaging/ooo')).status, 200, "B clearing B's own");
+  ok((await A.get('/api/messaging/ooo')).json.ooo?.active === true, "and A's is untouched by it");
+
+  eq((await A.del('/api/messaging/ooo')).status, 200, 'turned off');
+  const off = await pushB.nextWhere((x) => x.op === Op.Status && x.status?.who === A.user.id);
+  eq(off.status.ooo, null, 'the peer is told it is over');
+  ok(!(await B.get(`/api/messaging/status?ids=${A.user.id}`)).json.statuses?.[A.user.id]?.ooo, "and the peer's read agrees");
+});
+
 await section('presence: departure waits out the grace and carries last seen; appear offline hides arrival, departure and last seen', async () => {
   // C is a peer of A (groups from earlier sections). C connects, then
   // leaves: nothing is said for OfflineGrace (a reconnect must not flicker

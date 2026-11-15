@@ -188,6 +188,9 @@ type Status struct {
 	// appearing offline.
 	Online   bool       `json:"online"`
 	LastSeen *time.Time `json:"lastSeen,omitempty"`
+	// OOO is their out of office while it is in effect: the line and when
+	// it ends (ooo.go). Beside the status, never instead of it.
+	OOO *OOO `json:"ooo,omitempty"`
 }
 
 // Quote is as much of a replied-to message as a reply needs to show.
@@ -337,6 +340,12 @@ type Repository interface {
 	TouchSeen(ctx context.Context, userID string, at time.Time) error
 	LastSeenFor(ctx context.Context, ids []string) (map[string]time.Time, error)
 	StatusesFor(ctx context.Context, ids []string) (map[string]Status, error)
+	// Out of office (ooo.go).
+	SetOOO(ctx context.Context, userID, message string, start, end, now time.Time) error
+	ClearOOO(ctx context.Context, userID string) error
+	OOOOf(ctx context.Context, userID string, now time.Time) (OOO, bool, error)
+	OOOActive(ctx context.Context, ids []string, now time.Time) (map[string]OOO, error)
+	OOOCrossed(ctx context.Context, after, upto time.Time) ([]string, error)
 	SetVotes(ctx context.Context, messageID, userID string, options []int, at time.Time) error
 	PollTalliesFor(ctx context.Context, userID string, messageIDs []string) (map[string]*PollTally, error)
 	DeleteConversation(ctx context.Context, convID string) ([]Attachment, error)

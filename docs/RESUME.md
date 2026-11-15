@@ -1,6 +1,45 @@
 # Resume here — Teams parity work
 
-## Start here (handoff, 2026-11-10 evening)
+## Start here (handoff, 2026-11-15)
+
+**Phase 2 continues.** Done on 2026-11-15:
+
+- `docs/TEAMS_FUNCTIONS.md`: what Teams ships, function by function, read
+  from build 26304.1201.5310.7985 with `tools/teams-evidence.mjs` (new
+  `labels` command: 17,403 command labels) and REA for the native layer;
+  each row has Aether's status. Read it before choosing a Phase 3 item.
+- **Out of office** (ARCHITECTURE 6ca): `messaging/ooo.go`, table
+  `messaging_ooo`, three routes under `/api/messaging/ooo`, one spare bit on
+  the `OpStatus` push, the card on the account page, the row in the status
+  menu, the line above the compose box. `tools/e2e/ooo.e2e.mjs` (in the CI
+  list), `tools/e2e/measure-ooo.mjs`, a section in `messaging.e2e.mjs`, the
+  status menu and account page in the layout audit.
+
+**Next: notification settings** (per kind: direct, group, mention, reply,
+reaction; message preview; enforced in `notifyAbsent`, `recordActivity` and
+the client's `maybeNotify`). The client half of the decision is already in
+`web/src/sounds.js` (`noticeKind`, `wantsAlert`, tested). Then missed
+activity email, server-side speaker selection, data export and deletion;
+then the security phase and Phase 4 as below.
+
+Gotchas from today:
+
+- Stop a test server by its process id, never `taskkill /IM aether.exe`:
+  that also kills the server a harness run in the background is using.
+- The runners need Docker running (Mailpit). Starting Docker Desktop makes
+  Windows reserve UDP ports; when the reservation covers 49300-49310
+  (`netsh interface ipv4 show excludedportrange protocol=udp`) the relay
+  test fails locally with "Allocate error response (error 508)". It is the
+  machine; the Linux test stage is the gate for that test.
+- `web/src/app.js` has CRLF line endings in git, the other client files LF.
+  An exact-match patch written with LF finds nothing in it.
+- Backslashes in a Bash-tool heredoc are eaten (a regex, `
+`, a Windows
+  path). Write the script with the Write tool, then run it.
+- A partial index is not used for a range with a bound parameter unless the
+  planner can prove the range implies the index's condition; check the plan.
+
+## Earlier handoff (2026-11-10 evening)
 
 **Phase 2 is under way; Phase 1 is complete.** Done on 2026-11-10, each
 with CI green: the calendar (week view, recurring meetings, who is free)

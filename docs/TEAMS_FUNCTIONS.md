@@ -146,7 +146,7 @@ chat, settings and status strings.
 | Threads inside chats (follow, unfollow, "New Thread"), convert a chat to a channel, move messages to a channel | Not built | Channel threads are built |
 | Share a contact card; share to email | Not built | |
 | Export your chat history | Not built | Queued in Phase 2 as data export |
-| Status message shown above the compose box when you message someone who set one; "is out of office and may not respond" | Not built | Queued: out of office |
+| "is out of office and may not respond" above the compose box | Built | 6ca; direct chats. A status note is not shown there, and a group does not say a member is away |
 | SMS chat | N/A | Carrier |
 
 ## 3. Teams and channels (`teamsAndChannels`, `channels`, `peopleTargeting`, `communities`)
@@ -213,9 +213,9 @@ This is the area the next queue item covers, so it is listed in full.
 | Teams function | Aether | Gap or note |
 | --- | --- | --- |
 | Available, busy, do not disturb, away, appear offline; a note with an expiry; automatic in a call / presenting / away; last seen; profile card | Built | 6ag, 6an-6ap |
-| **Out of office**: a message, optionally only during a time period, shown on the profile and to anyone who writes | Not built | Queued, next |
+| **Out of office**: a message, optionally only during a time period, shown on the profile and to anyone who writes | Built | 6ca. No automatic reply and no separate message for outsiders, by decision |
 | Status duration ("Reset status after"); "Be right back" | Partial | The note expires; the picked status does not have its own timer in the UI |
-| "Show when people message me" for a status note | Not built | With out of office |
+| "Show when people message me" for a status note | Not built | The out of office line is shown that way; a status note is not |
 | Profile picture; edit display name | Partial | Letters and colour come from the person (6n); no photo upload |
 | Contacts: favourites, groups, speed dial; sync from Google, Outlook, the phone | Partial / N/A | Directory and people search are built; contact groups are not; sync is external |
 | Work location (office, remote, a building); nearby | Not built | |

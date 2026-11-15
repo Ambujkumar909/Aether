@@ -328,6 +328,10 @@ export const messaging = {
   history: (id) => api.get(`/api/messaging/messages/${encodeURIComponent(id)}/history`),
   // Availability: mine to set; my peers' to read.
   setStatus: (status, note = '', until = null) => api.put('/api/messaging/status', { status, note, until }),
+  // Out of office: mine to read, set (from and until are optional) and turn off.
+  ooo: () => api.get('/api/messaging/ooo'),
+  setOOO: (message, from = null, until = null) => api.put('/api/messaging/ooo', { message, from, until }),
+  clearOOO: () => api.del('/api/messaging/ooo'),
   statuses: (ids) => api.get('/api/messaging/status?' + qs({ ids: ids.join(',') })),
   // Polls: my vote on one, as option indexes (empty withdraws).
   vote: (id, options) => api.post(`/api/messaging/messages/${encodeURIComponent(id)}/vote`, { options }),

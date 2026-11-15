@@ -402,8 +402,16 @@ func (h *Hub) PushStatus(toUserID string, st Status) {
 		w.Uvarint(until)
 		w.Bool(st.Auto)
 		w.Bool(st.Online)
-		w.Bits(0, 6)
+		w.Bool(st.OOO != nil)
+		w.Bits(0, 5)
 		w.Uvarint(msOrZero(ptrTime(st.LastSeen)))
+		// Out of office costs a bit when there is none. When there is, the
+		// line is a blob and not an interned string: it is one person's
+		// sentence, seen once, and would only grow the dictionary.
+		if st.OOO != nil {
+			w.Blob([]byte(st.OOO.Message))
+			w.Uvarint(msOrZero(ptrTime(st.OOO.Until)))
+		}
 	})
 }
 

@@ -4,7 +4,7 @@
 // things you do while half-attending a meeting, and giving them room is what
 // makes a fifty-row audit table readable instead of a scrolling slit.
 
-import { session, users, audit, settings, twoStep, api, ROLES, ApiError } from './api.js';
+import { session, users, audit, settings, twoStep, messaging, api, ROLES, ApiError } from './api.js';
 import { pushNoticeState, setPushOff } from './push.js';
 import { LEVELS, soundLevel, setSoundLevel, play as playSound } from './sounds.js';
 
@@ -575,6 +575,23 @@ async function renderAccount() {
                 <pre class="ts-codes mono" id="ts-codes-list"></pre>
               </div>`}
        </div>` : ''}
+       <div class="card" id="ooo-card">
+         <h3>Out of office</h3>
+         <p class="hint">A line for anyone who writes to you while you are away. They see it above their message box before they send, and on your card; nothing is sent in your name.</p>
+         <p class="ooo-state" id="ooo-state" role="status">Checking…</p>
+         <label class="field"><span>Message</span>
+           <textarea id="ooo-msg" class="input" rows="2" maxlength="280" placeholder="Back on Monday. For anything urgent, ask the front desk."></textarea></label>
+         <div class="ooo-when">
+           <label class="field"><span>From <small>optional</small></span>
+             <input id="ooo-from" class="input" type="datetime-local" /></label>
+           <label class="field"><span>Until <small>optional</small></span>
+             <input id="ooo-until" class="input" type="datetime-local" /></label>
+         </div>
+         <div class="ooo-actions">
+           <button class="btn btn-primary" id="ooo-save" type="button">Turn on</button>
+           <button class="btn" id="ooo-off" type="button" hidden>Turn off</button>
+         </div>
+       </div>
        <div class="card" id="sounds-card">
          <h3>Sounds</h3>
          <p class="hint">Aether's own sounds: a ring, a chime for a message, a longer one when you are named, a step when somebody joins or leaves, a note for a raised hand. Do not disturb silences all but your own calls; quiet hours let through what is about you.</p>
@@ -647,6 +664,63 @@ async function renderAccount() {
       fail(e);
     }
   });
+
+  // Out of office: what is stored is read back before anything is drawn,
+  // and again after every change.
+  const localValue = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const dayTime = (iso) =>
+    new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const paintOOO = async () => {
+    const line = document.getElementById('ooo-state');
+    if (!line) return;
+    let o = null;
+    try {
+      o = (await messaging.ooo()).ooo;
+    } catch {
+      line.textContent = 'Could not read your out of office.';
+      return;
+    }
+    if (!document.getElementById('ooo-state')) return; // the page moved on
+    line.textContent = !o
+      ? 'Off.'
+      : o.active
+        ? `On${o.until ? ` until ${dayTime(o.until)}` : ', until you turn it off'}.`
+        : `Starts ${dayTime(o.from)}${o.until ? `, until ${dayTime(o.until)}` : ''}.`;
+    line.classList.toggle('on', !!o);
+    document.getElementById('ooo-msg').value = o?.message ?? '';
+    document.getElementById('ooo-from').value = o && !o.active ? localValue(o.from) : '';
+    document.getElementById('ooo-until').value = localValue(o?.until);
+    document.getElementById('ooo-save').textContent = o ? 'Save' : 'Turn on';
+    document.getElementById('ooo-off').hidden = !o;
+  };
+  paintOOO();
+  document.getElementById('ooo-save').onclick = async () => {
+    const iso = (id) => {
+      const v = document.getElementById(id).value;
+      return v ? new Date(v).toISOString() : null;
+    };
+    try {
+      await messaging.setOOO(document.getElementById('ooo-msg').value, iso('ooo-from'), iso('ooo-until'));
+      toast('Out of office saved.');
+    } catch (e) {
+      fail(e);
+    }
+    paintOOO();
+  };
+  document.getElementById('ooo-off').onclick = async () => {
+    try {
+      await messaging.clearOOO();
+      toast('Out of office is off.');
+    } catch (e) {
+      fail(e);
+    }
+    paintOOO();
+  };
 
   // Sounds: the level is this browser's, remembered; the buttons play once.
   const lvl = document.getElementById('sounds-level');

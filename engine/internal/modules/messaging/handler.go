@@ -76,6 +76,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/messaging/messages/{id}/replies", p(h.replies))
 	mux.Handle("GET /api/messaging/messages/{id}/history", p(h.history))
 	mux.Handle("GET /api/messaging/status", p(h.statuses))
+	mux.Handle("GET /api/messaging/ooo", p(h.myOOO))
+	mux.Handle("PUT /api/messaging/ooo", p(h.setOOO))
+	mux.Handle("DELETE /api/messaging/ooo", p(h.clearOOO))
 	mux.Handle("POST /api/messaging/messages/{id}/vote", p(h.vote))
 	mux.Handle("DELETE /api/messaging/channels/{id}", p(h.deleteChannel))
 	mux.Handle("PUT /api/messaging/blocks/{user}", p(h.block))
@@ -1039,6 +1042,8 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadRequest, "bad_announcement", "an announcement needs a headline of 80 characters or fewer")
 	case errors.Is(err, ErrBadStatus):
 		httpx.Error(w, http.StatusBadRequest, "bad_status", "status must be available, busy, dnd or away, with a note of 120 characters or fewer")
+	case errors.Is(err, ErrBadOOO):
+		httpx.Error(w, http.StatusBadRequest, "bad_ooo", "an out of office needs a message of 280 characters or fewer, and an end that is after its start and within a year")
 	case errors.Is(err, ErrNotAPoll):
 		httpx.Error(w, http.StatusBadRequest, "not_a_poll", "that message is not a poll")
 	case errors.Is(err, ErrBadVote):

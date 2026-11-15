@@ -68,7 +68,7 @@ import { EffectsPipeline, PRESETS as FX_PRESETS, MAX_IMAGES as FX_MAX_IMAGES, lo
 import { quantize as togQuantize, encodeMask as togEncode, MASK_W as TOG_W, MASK_H as TOG_H, MAX_MASK_BYTES as TOG_MAX, encodeSet as encodeTogSet, encodeOutline as encodeTogOutline, decodeTogether, seats as togSeats, SCENES as TOG_SCENES, PORTRAIT as TOG_PORTRAIT } from './together.js';
 import { encodeSet as encodeRecSet, encodeCaption, decodeRecording, banner as recBanner, elapsed as recElapsed, pickMime, ChunkSink, fileName as recFileName, WHAT as REC } from './recording.js';
 import { WSMediaSender, WSMediaReceiver, wsMediaSupported } from './wsmedia.js';
-import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence, cue } from './chat.js';
+import { sendRing, answerRing, myStatus, statusLabel, isDND, quietHours, setQuietHours, inQuietHours, myPresenceDot, isAutoStatus, personPresence, cue, oooOf } from './chat.js';
 import { ringLoop, shouldPlay, soundLevel } from './sounds.js';
 import { resolve as resolveShortcut, format as formatShortcut, groups as shortcutGroups } from './shortcuts.js';
 import { presenceIcon } from './presence.js';
@@ -5085,6 +5085,7 @@ function statusSection() {
     ${autoLine}
     <div class="st-opts">${['available', 'busy', 'dnd', 'away', 'offline'].map(opt).join('')}</div>
     ${quietRow()}
+    ${oooRow()}
     <div class="st-note-row">
       <input id="st-note" class="input" placeholder="Set a status message" maxlength="120" value="${esc(st.note || '')}" autocomplete="off" />
       <select id="st-until" class="input" aria-label="Clear after">
@@ -5096,6 +5097,16 @@ function statusSection() {
       </select>
     </div>
   </div>`;
+}
+// Out of office is set on the account page, where there is room for a
+// sentence and two dates; the menu says whether it is on and takes you there.
+function oooRow() {
+  const on = !!oooOf(session.user?.id);
+  return `<button type="button" class="ooo-row${on ? ' on' : ''}" id="st-ooo">
+      <svg width="14" height="14" viewBox="0 0 24 24"><use href="#i-ooo"/></svg>
+      <span class="quiet-label">Out of office${on ? ' <small>on</small>' : ''}</span>
+      <svg class="ooo-go" width="14" height="14" viewBox="0 0 24 24"><use href="#i-arrow-right"/></svg>
+    </button>`;
 }
 function quietRow() {
   const q = quietHours();
@@ -5130,6 +5141,17 @@ function wireQuietRow(el) {
 }
 function wireStatusSection(el) {
   wireQuietRow(el);
+  el.querySelector('#st-ooo')?.addEventListener('click', () => {
+    hideProfileMenu();
+    openConsole('account');
+    // The page reads the server before it draws; the card is there after.
+    const find = (n) => {
+      const card = document.getElementById('ooo-card');
+      if (card) card.scrollIntoView({ block: 'start' });
+      else if (n > 0) setTimeout(() => find(n - 1), 100);
+    };
+    find(30);
+  });
   const untilValue = () => {
     const v = el.querySelector('#st-until')?.value;
     if (!v) return null;

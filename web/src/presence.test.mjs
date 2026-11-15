@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { presenceIcon, statusLabel, isAutoStatus, presenceLine, agoText } from './presence.js';
+import { presenceIcon, statusLabel, isAutoStatus, presenceLine, agoText, oooActive, oooText } from './presence.js';
 
 // Every state has its own glyph and label; a shape, not only a colour.
 test('each status draws a distinct glyph with its label', () => {
@@ -57,4 +57,33 @@ test('the line: state, note, and last seen only for absence', () => {
   assert.equal(presenceLine({ status: 'incall', note: 'In a call' }, { online: true }), 'In a call', 'a note that repeats the state is not repeated');
   assert.equal(agoText(now - 30_000, now), 'just now');
   assert.equal(agoText(now - 26 * 3_600_000, now).startsWith('yesterday at '), true);
+});
+
+test('out of office is said beside the state, and stops at its end', () => {
+  const now = new Date(2026, 10, 16, 10, 0).getTime(); // Mon 16 Nov, 10:00
+  const today = new Date(2026, 10, 16, 15, 30).toISOString();
+  const friday = new Date(2026, 10, 20, 9, 0).toISOString();
+  const hm = new Date(today).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const day = new Date(friday).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+
+  assert.equal(oooActive(null, now), null);
+  assert.equal(oooActive({ message: '' }, now), null, 'no line, nothing to say');
+  assert.equal(oooActive({ message: 'Away', until: new Date(now).toISOString() }, now), null, 'the end is not included');
+  assert.equal(oooActive({ message: 'Away', until: new Date(now - 1).toISOString() }, now), null, 'past its end');
+  assert.ok(oooActive({ message: 'Away', until: new Date(now + 1).toISOString() }, now), 'a millisecond before its end');
+  assert.ok(oooActive({ message: 'Away' }, now), 'open-ended');
+
+  assert.equal(oooText({ message: 'Away' }, now), 'Out of office');
+  assert.equal(oooText({ message: 'Away', until: today }, now), `Out of office until ${hm}`, 'ending today: the time');
+  assert.equal(oooText({ message: 'Away', until: friday }, now), `Out of office until ${day}`, 'ending another day: the day');
+
+  const ooo = { message: 'Back Friday', until: friday };
+  assert.equal(presenceLine({ status: 'available', ooo }, { online: true, now }), `Available · Out of office until ${day}`);
+  assert.equal(presenceLine({ status: 'busy', note: 'Packing', ooo }, { online: true, now }), `Busy · Packing · Out of office until ${day}`);
+  assert.equal(
+    presenceLine({ status: 'available', ooo }, { online: false, lastSeen: now - 2 * 3_600_000, now }),
+    `Offline · Last seen 2 h ago · Out of office until ${day}`,
+    'it stands when they are offline: that is when it matters',
+  );
+  assert.equal(presenceLine({ status: 'available', ooo: { message: 'x', until: new Date(now - 5).toISOString() } }, { online: true, now }), 'Available', 'an ended one is not said');
 });

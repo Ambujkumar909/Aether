@@ -71,8 +71,10 @@ export function decodeChatFrame(h, r, f = { op: h.op }) {
       f.status = { who: r.str(), status: r.str(), note: r.str(), until: Number(r.uvarint()) };
       f.status.auto = r.bool();
       f.status.online = r.bool();
-      r.bits(6);
+      f.status.ooo = r.bool() ? {} : null;
+      r.bits(5);
       f.status.lastSeen = Number(r.uvarint());
+      if (f.status.ooo) f.status.ooo = { message: text(r.blob()), until: Number(r.uvarint()) };
       break;
     case Op.Presence:
       f.presence = { who: r.str(), on: r.bool() };

@@ -13,7 +13,7 @@ import { groupRuns } from './runs.js';
 import { renderBody, wrapSelection, suggestedReplies, plainText } from './format.js';
 import { receiptState, receiptTitle, unreadBy } from './receipts.js';
 import { rankPeople, mergePeople, highlight, createSearch } from './peoplesearch.js';
-import { presenceIcon, presenceLine, agoText, statusLabel as presenceLabel, isAutoStatus as presenceIsAuto } from './presence.js';
+import { presenceIcon, presenceLine, agoText, oooActive, oooText, statusLabel as presenceLabel, isAutoStatus as presenceIsAuto } from './presence.js';
 import { createIdleWatch } from './idle.js';
 import { createTypingBoard, createTypingSender } from './typing.js';
 import { shouldPlay, play as playSound, soundLevel } from './sounds.js';
@@ -366,10 +366,18 @@ function openSocket() {
       const untilMs = Number(r.uvarint());
       const auto = r.bool();
       const online = r.bool();
-      r.bits(6);
+      const away = r.bool();
+      r.bits(5);
       const seenMs = Number(r.uvarint());
+      // Out of office rides on the frame only while it is in effect.
+      let ooo = null;
+      if (away) {
+        const message = new TextDecoder().decode(r.blob());
+        const endMs = Number(r.uvarint());
+        ooo = { message, until: endMs ? new Date(endMs).toISOString() : null };
+      }
       if (r.err) return;
-      mergeStatuses({ [who]: { status, note, until: untilMs ? new Date(untilMs).toISOString() : null, auto, online, lastSeen: seenMs ? new Date(seenMs).toISOString() : null } });
+      mergeStatuses({ [who]: { status, note, until: untilMs ? new Date(untilMs).toISOString() : null, auto, online, lastSeen: seenMs ? new Date(seenMs).toISOString() : null, ooo } });
       renderList();
       if (state.active?.members?.some((x) => x.userId === who)) renderThread();
       if (who === session.user?.id) window.dispatchEvent(new CustomEvent('aether:my-status'));
@@ -600,8 +608,24 @@ if (typeof document !== 'undefined') {
 export function statusOf(userId) {
   const st = state.statuses.get(userId);
   if (!st) return { status: 'available', note: '', until: null };
-  if (st.until && new Date(st.until) < new Date()) return { status: 'available', note: '', until: null };
+  if (st.until && new Date(st.until) < new Date()) return { status: 'available', note: '', until: null, ooo: st.ooo };
   return st;
+}
+// A person's out of office while it is in effect, or null.
+export function oooOf(userId) {
+  return oooActive(state.statuses.get(userId)?.ooo);
+}
+// The line above the box you are typing in, when the person you are
+// writing to is away: said before you send, so nothing has to answer for
+// them afterwards.
+function oooNote(c) {
+  const other = peerOf(c);
+  const ooo = other && oooOf(other.userId);
+  if (!ooo) return '';
+  return `<div class="ooo-note" role="status">
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-ooo"/></svg>
+      <span><b>${esc(other.name || 'They')} is ${esc(oooText(ooo).replace(/^Out/, 'out'))}.</b> ${esc(ooo.message)}</span>
+    </div>`;
 }
 export function myStatus() {
   return statusOf(session.user?.id);
@@ -711,7 +735,7 @@ function totalUnread() {
 // paint is right without waiting for a presence frame.
 function mergeStatuses(obj) {
   for (const [id, st] of Object.entries(obj ?? {})) {
-    state.statuses.set(id, { status: st.status, note: st.note || '', until: st.until || null, auto: !!st.auto });
+    state.statuses.set(id, { status: st.status, note: st.note || '', until: st.until || null, auto: !!st.auto, ooo: st.ooo || null });
     if (typeof st.online === 'boolean') {
       if (st.online) state.online.add(id);
       else state.online.delete(id);
@@ -1462,6 +1486,7 @@ function renderThread() {
     }
     ${pendingStrip()}
     ${suggestionsStrip()}
+    ${oooNote(state.active)}
     <div class="composer">
       <div class="mention-host" id="c-mentions" hidden></div>
       ${formatBar()}
@@ -3665,6 +3690,7 @@ export async function openPersonCard(userId, hint = {}) {
             ${who.email ? `<a class="pc-mail" href="mailto:${esc(who.email)}">${esc(who.email)}</a>` : ''}
           </div>
         </div>
+        ${oooOf(userId) ? `<p class="pc-ooo"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-ooo"/></svg><span>${esc(oooOf(userId).message)}</span></p>` : ''}
         ${
           me
             ? ''

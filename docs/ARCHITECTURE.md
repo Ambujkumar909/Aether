@@ -6073,3 +6073,129 @@ harness (`shortcuts.e2e.mjs`) presses the keys in a real meeting and at
 home, including hold-to-talk and typing M into the chat, and the layout
 audit opens the sheet at three widths.
 
+
+### 6ca. Phase 2, part 2: out of office -- told before you send, and the frame the capture caught twice
+
+**What Teams does, read from its package.** Build 26304.1201.5310.7985
+(`docs/TEAMS_FUNCTIONS.md`): "Schedule out of office and set automatic
+replies", "Out of office message", "Send replies only during a time period",
+and, on the other side, "{member} is out of office and may not respond"
+above the compose box; `enableOOFSettings = !0`. The function is kept; the
+automatic reply is not. In Teams the reply is an email sent by Outlook; a
+chat product that answers for you sends a message nobody wrote into a
+thread, and the person who wrote first has already written. Aether tells
+the writer before they send, and sends nothing in anyone's name.
+
+**What it is.** A line of at most 280 characters with an optional window
+(`messaging/ooo.go`, table `messaging_ooo`, one row per person who has set
+it). It is not a status. A status is how reachable you are this minute, and
+the rooms and the idle clock overrule it; this is "do not expect an answer"
+and it stands whatever the dot says, including offline, which is when it
+matters most. So it rides beside the status on the same read and the same
+push, to the same people (those who share a conversation with you, and
+nobody else), and only while it is in effect: a leave planned for next week
+is stored and is its owner's to see, and is not announced this week.
+
+**The edges of the window.** Nobody is connected to a window that opens at
+midnight. The status loop, which already wakes every 15 s and on every join
+and leave, asks one more question each time: whose window began or ended
+since the last reading. Two range reads, each on its own index
+(`messaging_ooo_starts`, `messaging_ooo_ends`), returning only the people
+whose state changed; each of them is announced through the one function the
+loop already ended in (`announceStatus`). The read path does not depend on
+it: every read filters by the clock in SQL, and the client checks the end
+again when it draws, so a view left open past the end stops saying so
+whether or not the push has arrived.
+
+The second index was first written partial (`WHERE ends_at > 0`, since an
+open-ended row is never asked for). The plan test refused it: with the
+bound a parameter the planner cannot prove the range implies the index's
+condition, and scans. It is a plain index now.
+
+**Where a person sees it.** Above the box they are typing in, in a direct
+chat with someone away: "Asha is out of office until Wed 18 Nov. Back on
+Monday, ask the front desk." Beside the name in the chat header and on the
+person's card ("Available · Out of office until ..."), from `presenceLine`,
+the one function every person line goes through. It is set on the account
+page (a message, two optional native date-time fields, Save, Turn off); the
+status menu under the avatar says whether it is on and leads there. The
+card reads the server before it draws and after every change.
+
+**On the wire (tshark, loopback, IPv4: 4 B loopback + 20 IP + 20 TCP + 2
+WebSocket).** `tools/e2e/measure-ooo.mjs` against a plaintext server; B on
+a raw socket, A sharing a direct chat with B.
+
+| Event | Payload | On the wire | Payload / wire | As JSON, same transport |
+| --- | --- | --- | --- | --- |
+| A sets busy, no out of office (strings new to this socket) | 28 B | 74 B | 37.8% | 98 B payload, 144 B |
+| A turns it on: a 45 B message and an end | 60 B | 106 B | 56.6% | 199 B payload, 245 B |
+| A sets available while away (one new string) | 69 B | 115 B | 60.0% | 204 B payload, 250 B |
+| A turns it off (every string known) | 8 B | 54 B | 14.8% | 103 B payload, 149 B |
+| Six seconds idle with it on | 0 frames | 0 B | | |
+
+Each push is answered by a bare 44 B ACK, so the cost of telling one person
+is the frame plus 44 B; counting it, the four rows are 23.7%, 40.0%, 43.4%
+and 8.2%. The 8 B frame is the honest picture of this socket at rest: a
+two-byte header, three string handles, a flag byte and two empty varints,
+riding 46 B of framing. That is the
+per-packet floor the project has measured since section 1, and one status
+change is one packet; there is nothing to coalesce it with.
+
+What the feature costs: a bit in a flag byte that already existed when
+there is none (the unit test asserts the frame is byte-for-byte the size it
+was), and when there is one, the message plus 7 B (a length, and the end as
+a 6 B varint). The message is a blob, not an interned string: it is one
+person's sentence, seen once, and would only grow the dictionary.
+
+**The frame the capture caught twice.** The first capture showed a fifth
+frame nobody asked for: twelve seconds in, during the idle stretch, the
+same 106 B a second time. The loop had found the start of a window that
+began the moment it was set, which `SetOOO` had already announced. Every
+peer of everyone who turned it on would have been told twice. The unit
+test for the edges had passed, and when the case was added it passed again
+against the broken code: the loop's goroutine had not yet read the clock
+when the test set the out of office, so the start fell before its first
+reading. With the loop made to run first, as it does in a server, the test
+failed; the fix is one condition in the start half of the query (a start
+counts only when it was set ahead of time, `starts_at > updated_at`); the
+second capture has four frames and none while idle. Rule 4 for the third
+time in this project: a test that has not failed against the broken code
+is not evidence.
+
+**At 50,000.** 5,000 rows (one person in ten away, windows spread over a
+month): the tick's question 21 µs, finding the 1 or 2 that turned in that
+15 s; who among 200 listed people is away, 190 µs, one query however many
+are asked (`TestOutOfOfficeAtScaleIsIndexReads`, which also refuses any
+plan containing a scan).
+
+**Proof.** Five Go tests (bounds one over the line, the window as peers and
+as the owner see it, the push frame decoded field by field, the two edges
+through the running loop, the plans and timings). Sixteen planted faults,
+each run alone under `-race`: all sixteen caught (three were first written
+in a form that did not compile and were rewritten). `presence.test.mjs`
+covers the words and the end. `ooo.e2e.mjs` (33 checks, two real browsers):
+set from the account page, pushed to an open chat without a reload, on the
+card, after a reload at 390, 820 and 1280 with nothing cut off, moved into
+the future, refused when empty, and a six-second window that ends with
+nobody touching anything and is gone from the other browser by the next
+tick. `messaging.e2e.mjs` gains the REST section: the four bounds, a
+planned one unseen by a peer, the push with its end, anonymous and
+no-CSRF on all three routes, and that one person's is not another's to
+read or clear. The layout audit walks the status menu and the account page
+at every width.
+
+**What walking two more screens found.** Neither screen had been audited
+before. The audit failed four times on its first pass, none of them in the
+new controls: the status buttons in the menu were 37px high on touch and
+the console's tabs 40px. Both are 44px now. And the phone screenshot,
+looked at, showed "Turn off" offered while out of office was off: the
+button class sets `display`, which beats the `hidden` attribute (the trap
+recorded for the meeting bar in 6bi). The harness had only checked the
+attribute; it now checks what is drawn.
+
+**Not built.** A different message for people outside the organisation
+(Teams has one; Aether has no notion of outside beyond the directory
+scope). Showing it in a group when a member is away (Teams says "3 or more
+chat members are out of office"; here the member's line and card say it).
+Marking the window busy in "who is free". An out of office set by an
+administrator for someone else.

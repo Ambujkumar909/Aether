@@ -8281,3 +8281,31 @@ input, textarea, [contenteditable] { caret-color: var(--brand); }
   white-space: nowrap;
 }
 .sc-sheet .hint { margin: 14px 0 0; }
+
+/* Out of office: the line above the compose box of whoever writes to someone
+   away; the row in the status menu; the card on the account page. */
+.ooo-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 14px 6px; padding: 8px 10px; background: var(--surface); border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.4; color: var(--ink-2); overflow-wrap: anywhere; }
+.ooo-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--brand); }
+.ooo-note b { color: var(--ink); font-weight: 600; }
+.ooo-row { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; margin: 0 0 10px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; border-radius: var(--r-sm); }
+.ooo-row:hover, .ooo-row:focus-visible { color: var(--ink); }
+.ooo-row:focus-visible { box-shadow: 0 0 0 2px var(--brand-soft); }
+.ooo-row svg { flex: 0 0 auto; color: var(--ink-3); }
+.ooo-row.on svg:first-child, .ooo-row .quiet-label small { color: var(--brand); }
+@media (pointer: coarse) {
+  .ooo-row { min-height: 44px; }
+  /* Found when the audit first walked the status menu and the account page:
+     the status buttons were 37px high on touch and the console's tabs 40px. */
+  .st-opt, .console-nav button { min-height: 44px; }
+}
+.ooo-state { margin: 0 0 10px; font-size: 13px; color: var(--ink-3); }
+.ooo-state.on { color: var(--ink); font-weight: 600; }
+.ooo-when { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px; }
+.ooo-when small { color: var(--ink-3); font-weight: 400; }
+.ooo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+#ooo-msg { display: block; min-height: 64px; resize: vertical; }
+/* .btn sets display and so beats the hidden attribute: seen in the phone
+   screenshot, "Turn off" offered while it was off. */
+#ooo-off[hidden] { display: none; }
+.pc-ooo { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 8px 10px; background: var(--surface); border-radius: var(--r-sm); font-size: 13px; line-height: 1.4; color: var(--ink-2); overflow-wrap: anywhere; }
+.pc-ooo svg { flex: 0 0 auto; margin-top: 1px; color: var(--brand); }

@@ -60,9 +60,32 @@ export function agoText(ms, now = Date.now()) {
   return `on ${then.toLocaleDateString([], { day: 'numeric', month: 'short' })}`;
 }
 
+// oooActive is a person's out of office while it is in effect, or null.
+// The server sends it only while it is; the end is checked here as well so
+// a view left open past it stops saying so without waiting to be told.
+export function oooActive(ooo, now = Date.now()) {
+  if (!ooo || !ooo.message) return null;
+  if (ooo.until && new Date(ooo.until).getTime() <= now) return null;
+  return ooo;
+}
+
+// oooText is the words for it: "Out of office", or with its end, "Out of
+// office until 15:00" today and "until Mon 23 Nov" on another day.
+export function oooText(ooo, now = Date.now()) {
+  if (!ooo?.until) return 'Out of office';
+  const end = new Date(ooo.until);
+  const sameDay = end.toDateString() === new Date(now).toDateString();
+  const when = sameDay
+    ? end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : end.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  return `Out of office until ${when}`;
+}
+
 // presenceLine is the words beside a glyph: the state, then the note or
 // the last-seen time. "Away · Back at 3", "Offline · Last seen 2 h ago",
-// "In a call". A person appearing offline reads plainly "Offline".
+// "In a call". A person appearing offline reads plainly "Offline". Out of
+// office is said last and whatever the state: it is about the days ahead,
+// the rest is about this minute.
 export function presenceLine(st, { online = true, lastSeen = 0, now = Date.now() } = {}) {
   const status = online ? st?.status || 'available' : 'offline';
   const parts = [statusLabel(status)];
@@ -70,6 +93,8 @@ export function presenceLine(st, { online = true, lastSeen = 0, now = Date.now()
   // Last seen belongs to absence: offline, or away because every device
   // went quiet. Someone who picked Away while typing is not absent.
   if ((status === 'offline' || (status === 'away' && st?.auto)) && lastSeen) parts.push(`Last seen ${agoText(lastSeen, now)}`);
+  const ooo = oooActive(st?.ooo, now);
+  if (ooo) parts.push(oooText(ooo, now));
   return parts.join(' · ');
 }
 

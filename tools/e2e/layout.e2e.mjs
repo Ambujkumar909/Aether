@@ -236,6 +236,33 @@ const SCREENS = [
     },
   },
   {
+    // The status menu under the avatar: the states, quiet hours, the out of
+    // office row, the note.
+    name: 'status-menu',
+    go: async (page) => {
+      await page.evaluate(() => document.getElementById('top-avatar')?.click());
+      await sleep(600);
+    },
+  },
+  {
+    // Your account, reached from that row: two-step, out of office, sounds,
+    // notifications, password. Audited with the out of office card in view.
+    name: 'account',
+    go: async (page) => {
+      await page.evaluate(() => document.getElementById('st-ooo')?.click());
+      await page.waitForFunction(() => /\.$/.test(document.getElementById('ooo-state')?.textContent ?? ''), { timeout: 10000 });
+      await page.evaluate(() => document.getElementById('ooo-card')?.scrollIntoView());
+      await sleep(400);
+    },
+  },
+  {
+    name: 'account-closed',
+    go: async (page) => {
+      await page.evaluate(async () => (await import('/src/console.js')).closeConsole());
+      await sleep(300);
+    },
+  },
+  {
     name: 'chat-list',
     go: async (page) => {
       await page.evaluate(() => document.querySelector('[data-home="chat"]')?.click());
