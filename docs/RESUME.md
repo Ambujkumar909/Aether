@@ -2,7 +2,21 @@
 
 ## Start here (handoff, 2026-11-15)
 
-**Phase 2 continues.** Done on 2026-11-15:
+**Phase 2 continues.** Done on 2026-11-15, CI green on the last commit
+(`e4d59ca`: go, web, browser, container):
+
+| Commit | What |
+| --- | --- |
+| `dff3024` | `docs/TEAMS_FUNCTIONS.md`, `teams-evidence labels` |
+| `392e593` | Out of office |
+| `7b2fb99` | Go 1.26.11 (GO-2026-6859; it had turned CI red on `392e593`) |
+| `e4d59ca` | Notification settings |
+
+Gates run locally on the last commit: the Windows `-race` suite (every
+package but `internal/relay`, see the gotcha below), the Linux test stage
+(`docker build --target test`, all of it), web unit tests (243), and the
+browser harnesses console, notify, push, messaging, sounds, ooo, activity,
+layout (602 checks) and visual (354).
 
 - `docs/TEAMS_FUNCTIONS.md`: what Teams ships, function by function, read
   from build 26304.1201.5310.7985 with `tools/teams-evidence.mjs` (new
