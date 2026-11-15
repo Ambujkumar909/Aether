@@ -7,6 +7,7 @@
 //        strings.json  {namespace: [en-us strings]}
 //        settings.txt  "name = default" for every compiled config setting
 //   node tools/teams-evidence.mjs strings <out dir> <namespace|*> <regex> [limit]
+//   node tools/teams-evidence.mjs labels <out dir> [namespace]   (the commands a person can pick)
 //   node tools/teams-evidence.mjs settings <out dir> <regex>
 //   node tools/teams-evidence.mjs grep <package dir> <regex> [context chars]  (every code chunk)
 import fs from 'node:fs';
@@ -64,6 +65,23 @@ if (cmd === 'extract') {
   const re = new RegExp(c, 'i'), seen = new Set();
   for (const [ns, v] of Object.entries(all))
     if (b === '*' || b === ns) for (const s of v) if (re.test(s) && !seen.has(s) && seen.size < +(d ?? 40)) { seen.add(s); console.log(`[${ns}] ${s}`); }
+} else if (cmd === 'labels') {
+  // A label is a string short enough to be a button, a menu item or a
+  // heading: it starts with a capital, has no placeholder and does not end
+  // a sentence. That is the nearest thing the package has to a list of
+  // functions, because translation keys are hashed. One line per namespace
+  // (count first), or the labels themselves when a namespace is named.
+  const all = JSON.parse(fs.readFileSync(path.join(a, 'strings.json'), 'utf8'));
+  let total = 0;
+  for (const [ns, v] of Object.entries(all).sort((x, y) => y[1].length - x[1].length)) {
+    const own = new Map();
+    for (const s of v.map((s) => s.trim()))
+      if (s.length >= 3 && s.length <= 38 && !s.includes('{{') && s.split(/\s+/).length <= 5 && /^[A-Z]/.test(s) && !/[.!?:]$/.test(s) && !own.has(s.toLowerCase())) own.set(s.toLowerCase(), s);
+    total += own.size;
+    if (!b) console.log(`${String(own.size).padStart(5)} ${ns} (${new Set(v).size} strings)`);
+    else if (b === ns) console.log([...own.values()].sort().join(' | '));
+  }
+  if (!b) console.log(`${String(total).padStart(5)} labels in all`);
 } else if (cmd === 'settings') {
   const re = new RegExp(b);
   for (const l of fs.readFileSync(path.join(a, 'settings.txt'), 'utf8').split('\n')) if (re.test(l)) console.log(l);
@@ -80,6 +98,6 @@ if (cmd === 'extract') {
     }
   }
 } else {
-  console.error('usage: extract <pkg> <out> | strings <out> <ns|*> <regex> [n] | settings <out> <regex> | grep <pkg> <regex>');
+  console.error('usage: extract <pkg> <out> | strings <out> <ns|*> <regex> [n] | labels <out> [ns] | settings <out> <regex> | grep <pkg> <regex>');
   process.exit(2);
 }

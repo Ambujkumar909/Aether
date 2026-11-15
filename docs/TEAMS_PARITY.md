@@ -21,6 +21,11 @@ It yields 2,095 feature modules, 64,379 English UI strings in 102 namespaces
 and 11,829 default settings. A rule quoted in a row below in "quotes" is a
 string from the package; a number in `code` is a setting from it.
 
+**Function inventory (added 15 Nov 2026).** `docs/TEAMS_FUNCTIONS.md` lists what
+Teams ships area by area (build 26304.1201.5310.7985: 2,101 modules, 62,182
+strings, 17,403 command labels, the native layer read with REA), each with
+Aether's status. This file stays the record of what is built and proven.
+
 Legend: **Built** = shipped, unit-tested, in the e2e harness where it has an
 endpoint, and walked by the layout harness where it has a screen. **Partial**
 = a usable subset, gap named. **Not built** = deliberately not, reason given.
