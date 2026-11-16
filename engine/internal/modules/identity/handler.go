@@ -43,6 +43,7 @@ type Handler struct {
 	resetLimit  *httpx.Limiter
 	ssoLimit    *httpx.Limiter
 	apiLimit    *httpx.Limiter
+	exportLimit *httpx.Limiter
 	// signupCeiling bounds sign-ups across every address (SetSignupCeiling);
 	// nil is none. The per-address limiter is not enough against many
 	// addresses at once, and every sign-up with mail on sends an email.
@@ -87,6 +88,9 @@ func NewHandler(svc *Service, log *slog.Logger, secure, trustProxy bool) *Handle
 		// handful at once, which the burst absorbs; a script cannot sustain
 		// more than twenty without being told to wait.
 		apiLimit: httpx.NewLimiter(20, 60),
+		// A person's export reads everything they have: six an hour each,
+		// two at once. Nobody needs their data more often than that.
+		exportLimit: httpx.NewLimiter(6.0/3600.0, 2),
 	}
 }
 
@@ -120,6 +124,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		httpx.RateLimit(h.loginLimit, h.limitKey, http.HandlerFunc(h.resetPassword)))
 	mux.HandleFunc("POST /api/identity/logout", h.logout)
 	mux.Handle("GET /api/identity/me", h.RequireAuth(http.HandlerFunc(h.me)))
+	mux.Handle("GET /api/identity/export", h.RequireAuth(
+		httpx.RateLimit(h.exportLimit, func(r *http.Request) string { return UserFrom(r.Context()).ID }, http.HandlerFunc(h.export))))
 
 	mux.Handle("GET /api/identity/directory",
 		h.RequirePermission(PermJoinMeeting, http.HandlerFunc(h.directory)))

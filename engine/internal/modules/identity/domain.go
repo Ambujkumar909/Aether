@@ -4,7 +4,10 @@ package identity
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
+
+	"github.com/aether-rtc/aether/internal/platform/database"
 )
 
 // Role is a coarse bundle of permissions. Coarse on purpose: fine-grained
@@ -211,6 +214,8 @@ type Repository interface {
 	CreateUser(ctx context.Context, u *User) error
 	UpdateUser(ctx context.Context, u *User) error
 	DeleteUser(ctx context.Context, id string) error
+	// WriteExport streams a person's sections as JSON (export.go).
+	WriteExport(ctx context.Context, w io.Writer, sections []database.Section) error
 	UserByID(ctx context.Context, id string) (*User, error)
 	UserByEmail(ctx context.Context, email string) (*User, error)
 

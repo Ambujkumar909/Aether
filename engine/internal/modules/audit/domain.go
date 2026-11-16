@@ -47,6 +47,7 @@ const (
 	ActionUserSuspended   Action = "user.suspended"
 	ActionUserReactivated Action = "user.reactivated"
 	ActionUserDeleted     Action = "user.deleted"
+	ActionDataExported    Action = "user.data.exported"
 
 	ActionMeetingJoined   Action = "meeting.joined"
 	ActionMeetingLeft     Action = "meeting.left"

@@ -873,6 +873,30 @@ var migrations = []migration{
 		) WITHOUT ROWID`},
 	{"0080_messaging_mail_due_idx",
 		`CREATE INDEX IF NOT EXISTS messaging_mail_due_at ON messaging_mail_due(due_at, user_id)`},
+	// One person's rows, reached by the person: what an export reads and a
+	// deleted account takes with it (database/personal.go). Each of these
+	// tables was keyed by the message, the room or the other party, so
+	// finding one person's rows meant reading everybody's. The cost is one
+	// more index entry on each write to the table (ARCHITECTURE 6ce has the
+	// send benchmark before and after).
+	{"0081_messaging_messages_sender_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_messages_sender ON messaging_messages(sender_id, created_at)`},
+	{"0082_messaging_reactions_user_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_reactions_user ON messaging_reactions(user_id)`},
+	{"0083_messaging_poll_votes_user_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_poll_votes_user ON messaging_poll_votes(user_id)`},
+	{"0084_messaging_attachments_uploader_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_attachments_uploader ON messaging_attachments(uploader_id)`},
+	{"0085_messaging_calls_callee_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_calls_callee ON messaging_calls(callee_id)`},
+	{"0086_meeting_qna_questions_author_idx",
+		`CREATE INDEX IF NOT EXISTS meeting_qna_questions_author ON meeting_qna_questions(author_id)`},
+	{"0087_meeting_qna_replies_author_idx",
+		`CREATE INDEX IF NOT EXISTS meeting_qna_replies_author ON meeting_qna_replies(author_id)`},
+	{"0088_meeting_transcript_user_idx",
+		`CREATE INDEX IF NOT EXISTS meeting_transcript_user ON meeting_transcript(user_id)`},
+	{"0089_control_sessions_controller_idx",
+		`CREATE INDEX IF NOT EXISTS control_sessions_controller ON control_sessions(controller_id)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

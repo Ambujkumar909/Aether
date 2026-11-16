@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/aether-rtc/aether/internal/modules/audit"
+	"github.com/aether-rtc/aether/internal/platform/database"
 	"github.com/aether-rtc/aether/internal/platform/seal"
 	"golang.org/x/crypto/argon2"
 )
@@ -101,6 +102,11 @@ type Service struct {
 	// Guard holds the operator's sign-up policy (signupguard.go); nil is
 	// no block list and no mail check.
 	Guard *SignupGuard
+
+	// Personal lists the rows of the other modules that are one person's,
+	// for their export (export.go). Wired in main; nil means this module's
+	// own rows are all there is.
+	Personal func(userID, email string) []database.Section
 
 	// Sealer protects stored secrets (two-step sign-in) with the server's
 	// key; nil turns two-step sign-in off. tickets hold sign-ins between the

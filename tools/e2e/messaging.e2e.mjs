@@ -1190,6 +1190,37 @@ await section('notification settings: a closed set per kind, mine alone, carried
   ok(!(await feed()).includes(`reply:${answer.id}`), 'the one sent while replies were off is not put there afterwards');
 });
 
+await section('your data: one file, your own, nothing of anyone else, no secret, and not for the asking', async () => {
+  await refill();
+  const mark = 'export-check-' + Date.now();
+  const mine = (await A.post(`/api/messaging/conversations/${conv.id}/messages`, { body: `${mark} written by A` })).json;
+  const theirs = (await B.post(`/api/messaging/conversations/${conv.id}/messages`, { body: `${mark} written by B` })).json;
+  const gone = (await A.post(`/api/messaging/conversations/${conv.id}/messages`, { body: `${mark} taken back by A` })).json;
+  eq((await A.del(`/api/messaging/messages/${gone.id}`)).status, 200, 'A deletes one of their own');
+  const res = await A.req('GET', '/api/identity/export', undefined, { raw: true });
+  eq(res.status, 200, 'A downloads a copy');
+  ok(/^application\/json/.test(res.headers.get('content-type')) && /attachment; filename="aether-export-\d{4}-\d\d-\d\d\.json"/.test(res.headers.get('content-disposition')), `served as a file to keep (${res.headers.get('content-disposition')})`);
+  eq(res.headers.get('cache-control'), 'no-store', 'and never cached');
+  const text = await res.text();
+  let doc = null;
+  try { doc = JSON.parse(text); } catch {}
+  ok(doc && doc.account?.[0]?.email === A.user.email && doc.account[0].id === A.user.id, 'it is JSON, and the account in it is A');
+  ok(doc?.messages?.some((m) => m.id === mine.id && m.body === `${mark} written by A` && /^\d{4}-\d\d-\d\dT/.test(m.created_at)), 'what A wrote is in it, dated');
+  ok(!text.includes(`${mark} written by B`) && !doc?.messages?.some((m) => m.id === theirs.id), 'what B wrote in the same conversation is not');
+  ok(!text.includes(`${mark} taken back by A`) && !doc?.messages?.some((m) => m.id === gone.id), 'a message A deleted is gone, not handed back');
+  ok(doc?.conversations?.some((c) => c.id === conv.id), 'the conversations A is in are listed');
+  ok(doc?.sessions?.length >= 1 && doc?.your_actions?.some((x) => x.action === 'user.data.exported'), "with the sessions, and this download among A's own actions");
+  for (const [what, re] of [['a password hash', /password_hash|\$argon2/], ['a session token or its hash', /token_hash/], ['a push key', /p256dh/], ['a two-step secret', /"secret"/]]) ok(!re.test(text), `it carries no ${what}`);
+  const anon = new Client('anon');
+  eq((await anon.req('GET', '/api/identity/export', undefined, { raw: true })).status, 401, 'anonymous: refused');
+  // Two at once, six an hour: the third straight away is told to wait.
+  const second = await A.req('GET', '/api/identity/export', undefined, { raw: true });
+  await second.arrayBuffer();
+  const third = await A.req('GET', '/api/identity/export', undefined, { raw: true });
+  ok(second.status === 200 && third.status === 429 && third.headers.get('retry-after'), `a third copy at once is refused with Retry-After (${second.status}, ${third.status})`);
+  eq((await B.req('GET', '/api/identity/export', undefined, { raw: true })).status, 200, "B's own copy is not held up by A's");
+});
+
 await section('presence: departure waits out the grace and carries last seen; appear offline hides arrival, departure and last seen', async () => {
   // C is a peer of A (groups from earlier sections). C connects, then
   // leaves: nothing is said for OfflineGrace (a reconnect must not flicker

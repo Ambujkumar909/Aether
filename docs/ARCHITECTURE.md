@@ -6576,3 +6576,97 @@ two people, pass unchanged.
 it). Per-receiver choice (everyone hears the same six, a speaker the other
 five). A level in the WebRTC path's RTP header extension, so that path
 could choose per frame as well: it still ranks by the four-a-second report.
+
+### 6ce. Phase 2, part 6a: your data, as one file -- the export
+
+**What Teams does.** "Export your chat history" for a person, and a
+content export for administrators. The first is kept, wider: not only
+chats. The second is not built (below).
+
+**What it is.** `GET /api/identity/export` writes one JSON file of
+everything the server stores that is the signed-in person's: the account,
+its sessions, their own lines of the audit record, and from every other
+module what they wrote and what they set (messages and their earlier
+versions, files, reactions, votes, saved messages, blocks, status, out of
+office, notification settings, teams, activity, calls; meetings organised
+and invited to, attendance, questions and replies, transcript lines; push
+subscriptions; remote-control sessions). The account page has the button
+(6cb's page, "Your data").
+
+Three decisions, each a line that can be argued and is therefore written
+down:
+
+- **Yours, not what you can read.** What other people wrote is not in the
+  file, even in a conversation you are in. You can read those messages; they
+  are not yours to take away in bulk. A message you deleted is gone and is
+  not handed back.
+- **No secret.** No password hash, no session token or its hash, no
+  two-step secret, no push key. Each would be of no use to its owner and of
+  every use to whoever finds the file.
+- **Only your own, and there is no other kind.** The request carries no id:
+  it is the session's account. An administrator has no version of it.
+
+**How it is put together.** Each module says which of its rows are one
+person's as a list of sections, a name and a query (`PersonalSections` in
+messaging, scheduling, notify, control; identity's own in `export.go`).
+Identity writes them out through `database.WriteSections` and imports none
+of those modules; `main` hands it the lists. A new table with a person in it
+is one more line in its module's list, and the test in `cmd/aether` runs
+every query against the real schema, so a renamed column fails there.
+
+**Bounded.** Written a row at a time: the server's memory for an export is
+one row, however much the person has written (a test counts the writes for
+20,000 rows and the size of the largest). Six an hour a person, two at
+once, counted per account. Never cached; served as a download, not inline.
+Every one is recorded in the audit log (`user.data.exported`), and appears
+in the file as one of the person's own actions.
+
+**Nine indexes, and what they cost.** Messages, reactions, poll votes,
+files, calls, questions, replies, transcript lines and remote-control
+sessions were keyed by the message, the room or the other party: finding
+one person's rows meant reading everybody's. Each now has an index on the
+person (migrations 0081 to 0089), and the plan test refuses any section
+that scans. The cost is one more index entry per write. Sending a message,
+before and after, same machine, same minute (`BenchmarkSendInto200` /
+`Into5000`, three runs each): 0.83 to 0.91 ms and 2.48 to 2.58 ms before;
+0.86 to 0.88 ms and 2.47 to 2.56 ms after; two or three more allocations in
+about a thousand. Inside the run-to-run spread. The same indexes are what
+deleting an account will need.
+
+**On the wire (tshark, loopback, IPv4; `tools/e2e/measure-export.mjs`).** A
+person who wrote 2,000 messages of about 64 characters (128,890 B of
+words), downloading their file:
+
+| As requested | JSON | On the wire | Frames | Time |
+| --- | --- | --- | --- | --- |
+| Uncompressed (`Accept-Encoding: identity`) | 476,635 B | 489,929 B (484,254 down in 117 segments of 4,096 B; 5,675 up, 395 B of it the request) | 240 | 27 ms |
+| As a browser asks (`gzip`) | 476,802 B | 45,274 B (44,167 down in 11 segments; 1,107 up) | 31 | 13 ms |
+
+Uncompressed, the JSON is 97.3% of what crosses the wire and the person's
+words 26.3%: a message is 238 B of JSON for 64 B of text, because every row
+repeats its keys, its ids and an ISO date. That is the price of a file a
+person can open and any tool can parse, and compression takes it back: as a
+browser fetches it the whole file is 45 kB, less than a tenth, and smaller
+than the words alone would be sent raw. The server compresses for speed;
+the best gzip could do on the same file is 37,454 B, 16% less, for several
+times the processor. Both are streamed: the compressor holds back 512 B to
+decide, then writes through.
+
+**Proof.** Two tests on the writer (valid JSON, keys in column order, times
+as dates, an empty section an empty list, a failing section named and the
+file left unclosed; 20,000 rows streamed). One on the content: the caller's
+own account, sessions and actions; another module's section asked for the
+caller and nobody else; none of nine things that must not be in it (both
+tokens, the password hash, the column names of the hashes, the other
+person's address, network address and browser); the audit record. Two on
+the plans. Twenty-one planted faults, all caught (one rewritten to
+compile). `messaging.e2e.mjs`: what A wrote is in A's file and what B wrote
+in the same conversation is not; a deleted message is not; anonymous is
+refused; the third copy at once is 429 with Retry-After while B's is
+served. `yourdata.e2e.mjs` (13 checks): the button, the file the browser
+was handed read back, the refusal said on the page, the card on a phone.
+
+**Not built.** The bytes of the files (the file lists them; each is still
+downloadable while the account exists). A whole-conversation export of a
+direct or group chat, both sides. An administrator's export of somebody
+else, or of the organisation (eDiscovery). An export as anything but JSON.

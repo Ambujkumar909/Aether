@@ -345,6 +345,8 @@ func Describe(e Event) string {
 		return who + " reactivated " + orUnknown(e.Subject)
 	case ActionUserDeleted:
 		return who + " deleted " + orUnknown(e.Subject)
+	case ActionDataExported:
+		return who + " downloaded a copy of their own data"
 	case ActionMeetingJoined:
 		return who + " joined " + orUnknown(e.Subject)
 	case ActionMeetingLeft:

@@ -505,6 +505,14 @@ func main() {
 	// organisation's boundary at all. Enforced where conversations are made,
 	// not only where the directory draws results.
 	messagingModule.Service.MayMessage = identityModule.Service.MayMessage
+	// A person's own export (identity/export.go): each module says which of
+	// its rows are theirs; identity writes them out and imports none of them.
+	identityModule.Service.Personal = func(userID, email string) []database.Section {
+		out := messaging.PersonalSections(userID)
+		out = append(out, scheduling.PersonalSections(userID, email)...)
+		out = append(out, notify.PersonalSections(userID)...)
+		return append(out, control.PersonalSections(userID)...)
+	}
 	// Automatic status comes from the rooms alone: in a call while in one,
 	// presenting while sharing, and back to what was picked the moment the
 	// connection drops. The gateway nudges the loop on every such change so

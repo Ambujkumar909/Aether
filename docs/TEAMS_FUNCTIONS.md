@@ -145,7 +145,7 @@ chat, settings and status strings.
 | Loop components | Not built | Collaborative editing subsystem |
 | Threads inside chats (follow, unfollow, "New Thread"), convert a chat to a channel, move messages to a channel | Not built | Channel threads are built |
 | Share a contact card; share to email | Not built | |
-| Export your chat history | Not built | Queued in Phase 2 as data export |
+| Export your chat history | Partial | 6ce: one JSON file of everything that is yours (what you wrote, set and did, across chat, meetings and the account). Other people's side of a chat is not in it, by decision |
 | "is out of office and may not respond" above the compose box | Built | 6ca; direct chats. A status note is not shown there, and a group does not say a member is away |
 | SMS chat | N/A | Carrier |
 

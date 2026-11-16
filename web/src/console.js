@@ -652,6 +652,12 @@ async function renderAccount() {
          <p class="hint">At least 12 characters. Changing it ends every session, including this one.</p>
          <button class="btn btn-primary" id="pw-save">Change password</button>
        </div>
+       <div class="card" id="data-card">
+         <h3>Your data</h3>
+         <p class="hint">A copy of everything Aether stores that is yours: your account and sessions, what you wrote, what you set. Other people's messages are not in it. It is one file, and it is yours to keep.</p>
+         <button class="btn" id="data-export" type="button">Download a copy</button>
+         <p class="np-state" id="data-state" role="status"></p>
+       </div>
        <div class="card">
          <h3>Signed in as</h3>
          <div class="kv"><span class="kv-k">Name</span><span class="kv-v">${esc(u.displayName)}</span></div>
@@ -805,6 +811,29 @@ async function renderAccount() {
   for (const k of npKinds) document.getElementById('np-' + k).onchange = npSave;
   document.getElementById('np-preview').onchange = npSave;
   document.getElementById('np-email').onchange = npSave;
+
+  // Your data: fetched, then saved, so a refusal (six an hour) is said here
+  // and not left as a failed download in the browser's tray.
+  document.getElementById('data-export').onclick = async (e) => {
+    const b = e.currentTarget;
+    const line = document.getElementById('data-state');
+    b.disabled = true;
+    line.textContent = 'Preparing…';
+    try {
+      const res = await fetch('/api/identity/export', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(res.status === 429 ? 'You have downloaded several copies in the last hour. Try again later.' : 'Could not prepare your copy.');
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1] || 'aether-export.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      line.textContent = 'Downloaded.';
+    } catch (err) {
+      line.textContent = err.message;
+    }
+    b.disabled = false;
+  };
 
   // Sounds: the level is this browser's, remembered; the buttons play once.
   const lvl = document.getElementById('sounds-level');
