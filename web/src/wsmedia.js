@@ -98,6 +98,17 @@ const MAX_ENCODE_QUEUE = 4; // chunks pending in the encoder before we drop
 const PRESSURE_DROP_SCREEN = 96 * 1024; // bytes pending before screen frames drop
 const PRESSURE_DROP_CAMERA = 192 * 1024; // bytes pending before camera frames drop too
 
+// How loud a block of samples is, 0 to 63: the level meter's measure
+// (app.js startLevelMeter: RMS x 3.2, capped at 1) in the six spare bits of
+// an audio frame (wire.js). On this scale the room's speaking floor is 4,
+// about -34 dBFS; talking at the leveler's target is about 20.
+export function frameLevel(samples) {
+  if (!samples.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.round(Math.min(1, Math.sqrt(sum / samples.length) * 3.2) * 63);
+}
+
 export function wsMediaSupported() {
   return (
     typeof VideoEncoder === 'function' &&
@@ -351,6 +362,14 @@ export class WSMediaSender {
           data.close();
           continue;
         }
+        // The loudest block since the last chunk left is that chunk's level
+        // (the encoder gathers 10 ms blocks into 20 ms chunks). A block that
+        // cannot be read costs the mark, never the audio.
+        try {
+          if (!this.levelBuf || this.levelBuf.length < data.numberOfFrames) this.levelBuf = new Float32Array(data.numberOfFrames);
+          data.copyTo(this.levelBuf, { planeIndex: 0, format: 'f32-planar' });
+          this.audioLevel = Math.max(this.audioLevel || 0, frameLevel(this.levelBuf.subarray(0, data.numberOfFrames)));
+        } catch {}
         try {
           enc.encode(data);
         } catch (e) {
@@ -366,8 +385,13 @@ export class WSMediaSender {
     const payload = new Uint8Array(chunk.byteLength);
     chunk.copyTo(payload);
     const key = kind === 0 || chunk.type === 'key';
+    let level = 0;
+    if (kind === 0) {
+      level = this.audioLevel || 0;
+      this.audioLevel = 0;
+    }
     this.send((w) =>
-      this.encodeFrame(w, { kind, key, screen, vp9, ts: Math.max(0, Math.round(chunk.timestamp)), payload })
+      this.encodeFrame(w, { kind, key, screen, vp9, level, ts: Math.max(0, Math.round(chunk.timestamp)), payload })
     );
   }
 

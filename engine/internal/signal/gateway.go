@@ -667,6 +667,19 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 			return nil
 		}
 		body := append([]byte(nil), payload...)
+		// A voice is relayed only while it is one of the few the room hears
+		// (room/voices.go): everyone, while no more than that many
+		// microphones are open. On audio the spare bits are the frame's
+		// level, as the sender measured it. A frame of theirs held back just
+		// before this one, the start of the word, goes first.
+		var before []byte
+		if kind == 0 {
+			relay, held := rm.HearVoice(p.ID, int(spare), body, time.Now())
+			if !relay {
+				return nil
+			}
+			before = held
+		}
 		// The header, per receiver (the publisher's id is interned in each
 		// receiver's dictionary); the payload follows it, shared.
 		enc := func(w *wire.Writer) {
@@ -694,6 +707,9 @@ func (g *Gateway) dispatch(rm *room.Room, router *sfu.Router, peer *sfu.Peer,
 		}
 		for _, q := range audience {
 			if qc := g.connFor(q.ID); qc != nil && q.Send != nil {
+				if before != nil {
+					qc.EmitMedia(p.ID, false, true, before, enc)
+				}
 				if qc.EmitMedia(p.ID, kind == 1, key == 1, body, enc) {
 					g.forwardKeyframeReq(rm, q.ID, p.ID)
 				}

@@ -3193,6 +3193,9 @@ at the server, using the speech energy participants already report, is
 the next step for rooms where many stay unmuted; it is not built, and the
 ceiling row above bounds the cost until it is.
 
+(Built since: 6cd. The server chooses six voices per frame from a level the
+sender puts in the frame's spare bits.)
+
 Checked: web unit tests 144/144; audio harness green on both transports
 including the stress; hundred-socket relay test green, also under `-race`;
 in-call live check and layout harness rerun on the changed client.
@@ -6451,3 +6454,125 @@ reactions in the email. A one-click unsubscribe link (the email says where
 the setting is; it is opt-in). A retry when the mail server refuses a
 message that was already taken from the queue. One connection for several
 emails. HTML: it is plain text.
+
+### 6cd. Phase 2, part 5: six voices on the socket path, chosen by a level that was already on the wire
+
+**What was open.** 6at ended on it: the socket media path relayed every
+unmuted microphone to everyone, so a hundred open microphones cost each
+person a hundred streams whether or not anybody spoke. The WebRTC path
+never did (a receiver has six audio slots, `sfu.MaxAudioSlots`, re-pointed
+by speaker rank). This is the socket path's equivalent, in
+`room/voices.go`, and it is decided per frame.
+
+**The signal costs no bytes.** A socket media frame has a flags byte: kind,
+key, and six bits that on video carry "screen" and "VP9" and on audio
+carried nothing: always zero, on every 20 ms frame. They now carry the
+frame's level, 0 to 63: the sender's own measure of the samples it is about
+to encode (`wsmedia.js frameLevel`, RMS x 3.2 capped at 1, the same measure
+as the level meter, in six bits). An audio frame is still 122 B for 120 B
+of Opus (the unit test counts it). The alternative was already there, the
+energy report a client sends at most four times a second, and it is what
+the WebRTC path ranks by; chosen by that, a person is first heard up to a
+quarter of a second after they start. Chosen by the frame, they are heard
+from the frame they became loud in.
+
+**The rule.** At most six people are heard (`MaxVoices`).
+
+- While no more than six are sending, everyone sending is heard and no
+  frame is ever dropped: a meeting with six microphones open is exactly as
+  it was. Muted people send nothing (6at) and take no place.
+- Past that, a place goes to whoever is loud now (level 4 of 63, the
+  room's speaking floor, about -34 dBFS), taken from the member who has
+  been quiet the longest, and only if that member has been quiet for 1.5 s:
+  the gap between two words is not the end of a turn. If all six are
+  talking, a seventh is not heard until one stops.
+- A member who sends nothing for 2 s has muted or left; the place is free
+  to anyone, quiet or not.
+- One frame is kept for each person not heard, and when their next frame
+  wins a place the kept one is relayed in front of it if it is the frame
+  just before (60 ms): the breath before the word. One frame a person, and
+  it goes with the person.
+- Being ranked a speaker by the energy reports also counts as loud, so a
+  client that does not mark its frames (a tab opened before the upgrade) is
+  still found, at the old delay.
+
+A camera or a screen is not a voice: video is not gated by this, and a
+person who lost their place still shows. The level is the sender's word,
+like the energy report before it: a client that lies takes at most one
+place, which is what making noise would get it, and a host can mute it.
+
+What an unheard person costs is their uplink only (the server drops the
+frame on arrival, before the audience is even computed). The client is not
+told to stop sending: starting again would cost the first syllable, which
+is the thing this design exists to keep (6at).
+
+**Recovery.** A receiver sees a displaced voice simply stop, which its
+clock already treats as a pause, not an underrun (jitter.js GAP, the same
+path as a mute). The decoder resumes on the next frame it is given: Opus
+decodes on from any frame, at the cost of a few milliseconds of adaptation,
+as after a lost packet, so nothing has to be re-sent and no state has to
+be repaired (rule 5).
+
+**Measured, a hundred real sockets** (`TestHundredOpenMicrophonesThreeTalkingRelaysSix`
+beside the existing `TestHundredPersonRoomRelaysEveryAudioFrameToEveryoneElse`,
+both 120 B frames at 50 a second, real connections, the real coalescer):
+
+| Room of 100, every microphone open | Frames in | Relay work | Per recipient |
+| --- | --- | --- | --- |
+| Every frame to everyone (the path with no selection, as before) | 5,000 /s | 227 ms a second, 22.4% of a core | 616,733 B/s (4.9 Mbit/s) |
+| Three talking, six heard | 5,000 /s | 34 ms a second, 3.4% of a core | 37,281 B/s (298 kbit/s) |
+
+Every frame of the three talkers reached all 99 others, in order; nobody
+was sent more than six voices. 16.5 times fewer bytes to each person and
+6.7 times less work, and the decision itself is 150 ns a frame with no
+allocation (`BenchmarkHearVoice`). (6at's table gives the first row as
+394 KB/s; the same test reads 617 KB/s today, which is 5,000 frames of 123 B.
+The older figure is not reproduced and should be read as superseded.)
+
+**Measured, real browsers, tshark** (`tools/e2e/voices.e2e.mjs` against a
+plaintext server on the loopback, IPv4; the previous commit built in a
+scratch worktree for the before side). Seven tabs with a microphone of
+digital silence open, one muted listener, then one tab whose microphone is
+Chrome's test tone. What the listener's socket was sent:
+
+| Window | Before | After |
+| --- | --- | --- |
+| Seven silent microphones | 7 voices: 4,827 B/s on the wire, 2,611 B/s of it WebSocket payload, in 50 frames/s | 6 voices: 4,501 B/s, 2,262 B/s payload, in 50 frames/s |
+| The same, and one person speaking | 8 voices: 11,176 B/s, 8,962 B/s payload | 6 voices: 10,522 B/s, 8,285 B/s payload |
+
+So at eight people with silent microphones the saving is 6.8% and 5.9%:
+small, and worth saying, because Opus already spends about 7 B on a 20 ms
+frame of silence (349 B/s a voice) and the coalescer already puts every
+voice due in the same 20 ms into one TCP segment (50 segments a second
+whether six voices or eight). What this work removes is the case those two
+do not: microphones that carry something (a room, a keyboard, a fan under
+the floor) in a meeting large enough to have many of them, which is the
+table above. Also in the capture, and not changed by this: a listener who
+sends nothing still pays 2,215 B/s upstream, fifty bare TCP ACKs a second;
+and a silent sender pays 3,786 B/s to deliver 474 B/s of payload, 12.5%.
+Those are TCP's, and the reason the WebRTC path stays the preferred one.
+
+In the same run the browser's own numbers: silence read level 0 of 63 on
+every frame, the tone 63, the speaker was heard 1.0 s after opening the
+page (join included), kept the place through the gaps between beeps (152
+of 150 expected frames in three seconds), and the listener was never sent
+more than six voices at once. Against the previous server the harness
+fails on four of its nine checks (seven voices, then eight), which is what
+shows it can.
+
+**Proof.** Five Go tests on the rule with the clock passed in (six heard
+whatever their level and a seventh not; the longest quiet displaced and
+nobody between words; the kept frame, once, and never a stale one; a place
+freed by silence on the wire or by leaving; ranked counts as loud), one
+through the real dispatcher and real sockets that waits out the hold, and
+the hundred-socket test. Twenty-one planted faults in Go and eight in the
+client, all caught (one client fault was missed first: a video frame's
+level was not asserted; it is now). Two client tests: the level of a block
+of samples, and that the level rides the spare bits for no more bytes and
+is never read as "screen". The audio, mute and call harnesses, which are
+two people, pass unchanged.
+
+**Not built.** Telling an unheard client that it is unheard (it could show
+it). Per-receiver choice (everyone hears the same six, a speaker the other
+five). A level in the WebRTC path's RTP header extension, so that path
+could choose per frame as well: it still ranks by the four-a-second report.

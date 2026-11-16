@@ -613,13 +613,18 @@ export function decodeICE(r) {
 // A 120 B Opus frame (48 kbit/s x 20 ms) is 122 B client to server and 123 B
 // server to client (one-byte header), against 127 before; tshark figures in
 // ARCHITECTURE.md.
-// Flags: bit 0 of the six spare bits marks a screen, bit 1 says the video is
-// VP9 (else VP8). The server relays them untouched.
-export function encodeMediaFrame(w, { kind, key, ts, payload, screen = false, vp9 = false }) {
+// Flags: on video, bit 0 of the six spare bits marks a screen, bit 1 says the
+// video is VP9 (else VP8). The server relays them untouched.
+// On audio the same six bits are the frame's level, 0 to 63 (wsmedia.js
+// frameLevel): how loud the sender measured this 20 ms to be. The server
+// chooses whose voice to relay from it when more microphones are open than
+// it relays (room/voices.go). The bits were already on the wire, always
+// zero; saying something with them costs nothing.
+export function encodeMediaFrame(w, { kind, key, ts, payload, screen = false, vp9 = false, level = 0 }) {
   w.header(Op.MediaFrame);
   w.bits(kind & 1, 1);
   w.bits(key ? 1 : 0, 1);
-  w.bits((screen ? 1 : 0) | (vp9 ? 2 : 0), 6);
+  w.bits(kind === 1 ? (screen ? 1 : 0) | (vp9 ? 2 : 0) : Math.max(0, Math.min(63, level | 0)), 6);
   if (kind === 1) w.uvarint(ts);
   w.raw(payload);
 }
@@ -631,7 +636,8 @@ export function decodeMediaFrame(r) {
   const spare = r.bits(6);
   const ts = kind === 1 ? r.uvarint() : 0;
   const payload = r.tail();
-  return { publisher, kind, key, ts, payload, screen: (spare & 1) === 1, vp9: (spare & 2) === 2 };
+  const video = kind === 1;
+  return { publisher, kind, key, ts, payload, screen: video && (spare & 1) === 1, vp9: video && (spare & 2) === 2, level: video ? 0 : spare };
 }
 
 // The whole gallery in one frame. A scroll moves every tile at once, and

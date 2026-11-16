@@ -43,6 +43,10 @@ type Participant struct {
 	// (sockview.go); nil until they first say.
 	sockView map[string]bool
 
+	// voice: this person's part in which voices the socket path relays
+	// (voices.go).
+	voice voiceState
+
 	// Meter is this participant's byte ledger, a child of the room meter.
 	Meter *ledger.Meter
 
@@ -88,6 +92,9 @@ type Room struct {
 	mu           sync.RWMutex
 	participants map[string]*Participant
 	speakers     []string
+	// voices: whose socket-path audio is relayed now, at most MaxVoices
+	// (voices.go).
+	voices []string
 
 	// The waiting room. See lobby.go: somebody in here is deliberately NOT in
 	// participants, so no roster names them and no broadcast reaches them.

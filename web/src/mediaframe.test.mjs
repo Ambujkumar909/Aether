@@ -57,3 +57,48 @@ test('the codec rides a spare flag bit: VP9 and screen, together or apart', () =
     assert.ok(flags >= 2);
   }
 });
+
+test('an audio frame says how loud it is in the six bits that were spare, for no more bytes', () => {
+  for (const [level, want] of [[0, 0], [4, 4], [63, 63], [200, 63], [-3, 0], [20.9, 20]]) {
+    const w = new Writer(null);
+    encodeMediaFrame(w, { kind: 0, key: true, ts: 0, payload: opus, level, screen: true, vp9: true });
+    assert.equal(w.bytes().length, 122, 'still 122 for 120');
+    const r = new Reader(w.bytes(), null);
+    r.header();
+    r.bits(2);
+    assert.equal(r.bits(6), want, `level ${level}`);
+  }
+  // As a receiver reads it: a loud voice is not a screen and not VP9.
+  const dicts = newDictPair();
+  const w = new Writer(dicts.tx);
+  w.header(Op.MediaFrame);
+  w.str('publisher-42');
+  w.bits(0, 1);
+  w.bits(1, 1);
+  w.bits(63, 6);
+  w.raw(opus);
+  const r = new Reader(w.bytes(), dicts.rx);
+  r.header();
+  const f = decodeMediaFrame(r);
+  assert.deepEqual([f.kind, f.screen, f.vp9, f.level], [0, false, false, 63]);
+  // And a video frame has no level.
+  const v = new Writer(null);
+  encodeMediaFrame(v, { kind: 1, key: true, ts: 5, payload: opus, screen: true, level: 40 });
+  const rv = new Reader(v.bytes(), null);
+  rv.header();
+  rv.bits(2);
+  assert.equal(rv.bits(6), 1, 'the screen flag, not a level');
+  // As a receiver reads a screen frame in VP9: flags, and no level.
+  const sv = new Writer(dicts.tx);
+  sv.header(Op.MediaFrame);
+  sv.str('publisher-42');
+  sv.bits(1, 1);
+  sv.bits(1, 1);
+  sv.bits(3, 6);
+  sv.uvarint(5);
+  sv.raw(opus);
+  const rs = new Reader(sv.bytes(), dicts.rx);
+  rs.header();
+  const g = decodeMediaFrame(rs);
+  assert.deepEqual([g.kind, g.screen, g.vp9, g.level], [1, true, true, 0]);
+});

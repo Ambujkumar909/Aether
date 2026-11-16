@@ -20,8 +20,21 @@
   included today), web unit tests (243), the browser harnesses digest,
   notify, messaging, push, console, layout, visual, ooo, activity, and the
   Linux test stage.
+- A before/after capture needs the previous commit as a binary: `git worktree
+  add --detach <scratch>/wt-old <commit>`, build it there to a fixed path,
+  serve its own `web/` with `-web`. A plaintext server on `127.0.0.1` is a
+  secure context, so microphones work and tshark reads the WebSocket.
 
-**Next, in order:** server-side speaker selection, data export and deletion;
+Also done on 2026-11-16: **server-side speaker selection on the socket
+path** (ARCHITECTURE 6cd). `room/voices.go` (`HearVoice`, at most
+`MaxVoices` = 6), called from the `OpMediaFrame` case of
+`signal/gateway.go`; the client marks each audio frame with its level in
+the six spare bits (`wire.js encodeMediaFrame`, `wsmedia.js frameLevel`).
+`tools/e2e/voices.e2e.mjs` needs two browsers (a silent microphone and
+Chrome's tone) and is in the CI list. The WebRTC path already had six
+audio slots (`sfu/slots.go`).
+
+**Next, in order:** data export and deletion;
 then the security phase (which should include reporting a message or a
 person to an administrator, a challenge before an anonymous join, and the
 email's place in the threat model: other people's words in mail from the

@@ -66,6 +66,7 @@ ecosystem.
 | Instant unmute (silenced live track, no renegotiation) | Built | 96 ms on WebRTC, 181 ms on the socket |
 | Automatic WebRTC for browsers without WebCodecs (Safari, iOS, Firefox) | Built | `chooseTransport` |
 | Muted participants cost the room nothing (socket path) | Built | disabled track sends no frames; receive clock treats the gap as a pause |
+| Only the people talking are relayed in a large meeting (socket path) | Built | At most six voices at once, chosen per 20 ms frame from a level the sender puts in bits that were already on the wire; everyone is heard while six or fewer microphones are open; 100 open microphones cost each person 298 kbit/s instead of 4.9 Mbit/s (ARCHITECTURE 6cd). The WebRTC path has had six audio slots since 6bu |
 | Active-speaker audio selection at the server | Not built | relay every unmuted sender; 100 talking = 3.2 Mbit/s per recipient, measured |
 | gzip for pages, scripts and JSON; 304 revalidation for unchanged files | Built | first load 645 → 210 KB; unchanged files 0 B body |
 | On-demand keyframes on the socket path (periodic every 10 s only as fallback) | Built | `OpKeyframeReq` to a socket publisher, deduplicated per 300 ms |
