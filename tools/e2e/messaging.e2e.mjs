@@ -1142,6 +1142,10 @@ await section('out of office: a bounded line with a window, shown to peers only 
 });
 
 await section('notification settings: a closed set per kind, mine alone, carried on the list, and off keeps a row out of the feed', async () => {
+  // Thirty requests from A straight after the out of office section's: on a
+  // fast machine the last of them met the per-account budget (CI, 2af6548:
+  // the final read of the feed came back 429 and so empty).
+  await refill();
   const def = (await A.get('/api/messaging/notify')).json.notify;
   eq(def, { direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true, email: 'off' }, 'with nothing chosen: the defaults, and no email');
   eq((await A.get('/api/messaging/notify')).json.emailOffered, true, 'the server says it can send mail, so the page may offer a period');
