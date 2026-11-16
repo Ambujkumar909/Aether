@@ -55,12 +55,22 @@ async function signIn(ctx, a, label) {
   }, a.email, a.password);
   return page;
 }
+// Nine tabs each running the neural noise suppressor is more than a two-core
+// CI runner has (the eighth tab took over 20 s to join there). The suppressor
+// is not what this harness is about; it is switched off by its remembered
+// setting, and joining is given a minute.
+const LIGHT = () => {
+  try {
+    localStorage.setItem('aether.denoise', 'off');
+  } catch {}
+};
 async function joinAudio(page) {
+  await page.evaluateOnNewDocument(LIGHT);
   await page.goto(`${BASE}/?room=${room}&media=ws&audio=1`, { waitUntil: 'networkidle2', timeout: 30000 });
-  await page.waitForFunction(() => getComputedStyle(document.getElementById('prejoin')).display !== 'none', { timeout: 20000 });
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('prejoin')).display !== 'none', { timeout: 60000 });
   await sleep(500);
   await page.evaluate(() => document.getElementById('pj-join')?.click());
-  await page.waitForFunction(() => getComputedStyle(document.getElementById('app')).display !== 'none', { timeout: 20000 });
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('app')).display !== 'none', { timeout: 60000 });
 }
 // Per publisher (one receiver each): frames since the last read, and the
 // loudest level among them.
