@@ -20,7 +20,7 @@ mkdirSync(SHOTS, { recursive: true });
 const acc = await accounts(['A', 'B']);
 const browser = await launch();
 const log = [];
-const DEFAULTS = { direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true };
+const DEFAULTS = { direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true, email: 'off' };
 
 const openAccount = async (page) => {
   // Emptied first: the page redraws after reading the server, and a card
@@ -59,7 +59,7 @@ try {
 
   // The card: nothing can be changed until the server has been read.
   ok(await openAccount(A), "A's account page has the notification card, enabled once read");
-  const first = await A.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-np]')].map((s) => [s.dataset.np, s.value]).concat([['preview', document.getElementById('np-preview').checked]])));
+  const first = await A.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-np]')].map((s) => [s.dataset.np, s.value]).concat([['preview', document.getElementById('np-preview').checked], ['email', document.getElementById('np-email').value]])));
   ok(JSON.stringify(first) === JSON.stringify(DEFAULTS), `it shows what is stored (${JSON.stringify(first)})`);
   const offered = await A.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-np]')].map((s) => [s.dataset.np, [...s.options].map((o) => o.value).join('/')])));
   ok(offered.direct === 'alert/quiet' && offered.mention === 'alert/quiet' && offered.reply === 'alert/quiet/off' && offered.reaction === 'quiet/off', `each kind offers only the levels it has (${JSON.stringify(offered)})`);

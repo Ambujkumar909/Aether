@@ -5897,7 +5897,7 @@ body.rail-collapsed .rail {
 .pill-n:empty { display: none; }
 .pill-n {
   min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center;
-  background: var(--brand); color: var(--on-solid);
+  background: var(--brand); color: var(--brand-ink); /* the ink made for this ground: --on-solid was 3.1:1 on the dark theme's brand */
 }
 
 .avatar.chan { font-weight: 700; font-size: 15px; }
@@ -5997,7 +5997,7 @@ body.rail-collapsed .rail {
 .bubble.mentions-me { box-shadow: inset 3px 0 0 var(--brand); }
 .mention-badge {
   display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px;
-  border-radius: 9px; background: var(--brand); color: var(--on-solid); font-size: 11px; font-weight: 800; margin-right: 4px;
+  border-radius: 9px; background: var(--brand); color: var(--brand-ink); font-size: 11px; font-weight: 800; margin-right: 4px;
 }
 .composer { position: relative; }
 .mention-host {
@@ -8325,6 +8325,8 @@ input, textarea, [contenteditable] { caret-color: var(--brand); }
 .np-preview .switch input:checked + span::after { transform: translateX(16px); }
 .np-preview .switch input:focus-visible + span { box-shadow: 0 0 0 2px var(--brand-soft); }
 .np-preview .switch input:disabled + span { opacity: .5; }
+.np-email { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.np-email .hint { margin: 8px 0 0; }
 .np-state { min-height: 18px; margin: 10px 0 0; font-size: 12.5px; color: var(--ink-3); }
 @media (pointer: coarse) {
   .np-row .input { min-height: 44px; }

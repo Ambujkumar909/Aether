@@ -17,9 +17,9 @@ import (
 // a feed row to leave out.
 //
 // One row per person who has changed something; no row means the defaults,
-// which are what Aether did before there were settings. A setting only
-// ever takes away: nothing here causes a notice that would not otherwise
-// have been sent. Urgent messages and calls are not settings. They always
+// which are what Aether did before there were settings. A level only ever
+// takes away: nothing it says causes a notice that would not otherwise
+// have been sent. (The email period is the exception and starts off.) Urgent messages and calls are not settings. They always
 // come through, and do not disturb and quiet hours have their own rules
 // for those.
 //
@@ -51,15 +51,35 @@ type NotifyPrefs struct {
 	Reaction string `json:"reaction"` // quiet, off: a reaction never alerts
 	// Preview is whether a notice may carry the words of the message.
 	Preview bool `json:"preview"`
+	// Email is how often a missed-activity email may be sent: off, 10m,
+	// hourly, 8h or daily (maildigest.go). It is the one setting here that
+	// adds a notice, so it starts off.
+	Email string `json:"email"`
+}
+
+// emailPeriods is the closed set of Email, in minutes; it is stored as the
+// number.
+var emailPeriods = map[string]int{"off": 0, "10m": 10, "hourly": 60, "8h": 480, "daily": 1440}
+
+func emailPeriodName(minutes int) string {
+	for name, m := range emailPeriods {
+		if m == minutes {
+			return name
+		}
+	}
+	return "off"
 }
 
 // DefaultNotifyPrefs is what everyone has until they choose otherwise.
 func DefaultNotifyPrefs() NotifyPrefs {
-	return NotifyPrefs{Direct: NotifyAlert, Group: NotifyAlert, Mention: NotifyAlert, Reply: NotifyAlert, Reaction: NotifyQuiet, Preview: true}
+	return NotifyPrefs{Direct: NotifyAlert, Group: NotifyAlert, Mention: NotifyAlert, Reply: NotifyAlert, Reaction: NotifyQuiet, Preview: true, Email: "off"}
 }
 
 func (p NotifyPrefs) valid() bool {
 	two := func(v string) bool { return v == NotifyAlert || v == NotifyQuiet }
+	if _, ok := emailPeriods[p.Email]; !ok {
+		return false
+	}
 	return two(p.Direct) && two(p.Group) && two(p.Mention) &&
 		(two(p.Reply) || p.Reply == NotifyOff) &&
 		(p.Reaction == NotifyQuiet || p.Reaction == NotifyOff)
@@ -133,12 +153,12 @@ func notifyLevel(v string) int {
 
 func (r *SQLRepository) SetNotifyPrefs(ctx context.Context, userID string, p NotifyPrefs, now time.Time) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO messaging_notify_prefs(user_id, direct, grp, mention, reply, reaction, preview, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO messaging_notify_prefs(user_id, direct, grp, mention, reply, reaction, preview, email, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET direct=excluded.direct, grp=excluded.grp, mention=excluded.mention,
-			reply=excluded.reply, reaction=excluded.reaction, preview=excluded.preview, updated_at=excluded.updated_at`,
+			reply=excluded.reply, reaction=excluded.reaction, preview=excluded.preview, email=excluded.email, updated_at=excluded.updated_at`,
 		userID, notifyLevel(p.Direct), notifyLevel(p.Group), notifyLevel(p.Mention), notifyLevel(p.Reply),
-		notifyLevel(p.Reaction), boolInt(p.Preview), now.UnixMilli())
+		notifyLevel(p.Reaction), boolInt(p.Preview), emailPeriods[p.Email], now.UnixMilli())
 	return err
 }
 
@@ -151,7 +171,7 @@ func (r *SQLRepository) NotifyPrefsFor(ctx context.Context, ids []string) (map[s
 	}
 	ph, args := placeholders(ids)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT user_id, direct, grp, mention, reply, reaction, preview
+		SELECT user_id, direct, grp, mention, reply, reaction, preview, email
 		  FROM messaging_notify_prefs WHERE user_id IN (`+ph+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -159,12 +179,12 @@ func (r *SQLRepository) NotifyPrefsFor(ctx context.Context, ids []string) (map[s
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		var d, g, m, re, rx, pv int
-		if err := rows.Scan(&id, &d, &g, &m, &re, &rx, &pv); err != nil {
+		var d, g, m, re, rx, pv, em int
+		if err := rows.Scan(&id, &d, &g, &m, &re, &rx, &pv, &em); err != nil {
 			return nil, err
 		}
 		out[id] = NotifyPrefs{Direct: notifyLevels[d], Group: notifyLevels[g], Mention: notifyLevels[m],
-			Reply: notifyLevels[re], Reaction: notifyLevels[rx], Preview: pv != 0}
+			Reply: notifyLevels[re], Reaction: notifyLevels[rx], Preview: pv != 0, Email: emailPeriodName(em)}
 	}
 	return out, rows.Err()
 }
@@ -177,7 +197,9 @@ func (h *Handler) notifyPrefs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"notify": p})
+	// emailOffered: whether this server can send mail at all, so the page
+	// does not offer a period nothing will ever act on.
+	httpx.JSON(w, http.StatusOK, map[string]any{"notify": p, "emailOffered": h.svc.Mail != nil})
 }
 
 func (h *Handler) setNotifyPrefs(w http.ResponseWriter, r *http.Request) {

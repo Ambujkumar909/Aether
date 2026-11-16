@@ -381,6 +381,12 @@ type Repository interface {
 	MarkActivityReadIn(ctx context.Context, userID, convID string) ([]string, error)
 	RemoveReactionActivity(ctx context.Context, messageID, actorID, emoji string) (userID, id string, err error)
 
+	// Missed-activity email (see maildigest.go).
+	AddMailDue(ctx context.Context, rows []mailDue) error
+	MailDueUsers(ctx context.Context, now time.Time, limit int) ([]string, error)
+	TakeMailDue(ctx context.Context, userID string) ([]string, error)
+	MailDigest(ctx context.Context, userID string, convIDs []string) ([]DigestLine, error)
+
 	// Blocks.
 	Block(ctx context.Context, userID, blockedID string, at time.Time) error
 	Unblock(ctx context.Context, userID, blockedID string) error

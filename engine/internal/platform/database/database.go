@@ -853,6 +853,26 @@ var migrations = []migration{
 			preview    INTEGER NOT NULL CHECK (preview  IN (0, 1)),
 			updated_at INTEGER NOT NULL
 		) WITHOUT ROWID`},
+	// Missed-activity email (messaging/maildigest.go). The setting is a
+	// period in minutes from a closed set, 0 for never. A due row says a
+	// person has something waiting in a conversation and when their next
+	// email may go; what the email says is read from the messages when it
+	// is written, so the row holds no content. No foreign key: a row whose
+	// conversation or membership has gone finds nothing to say and is
+	// removed when it comes due, and a cascade here would scan this table
+	// on every conversation deleted.
+	{"0078_messaging_notify_prefs_email",
+		`ALTER TABLE messaging_notify_prefs ADD COLUMN email INTEGER NOT NULL DEFAULT 0
+			CHECK (email IN (0, 10, 60, 480, 1440))`},
+	{"0079_messaging_mail_due", `
+		CREATE TABLE IF NOT EXISTS messaging_mail_due (
+			user_id         TEXT    NOT NULL,
+			conversation_id TEXT    NOT NULL,
+			due_at          INTEGER NOT NULL,
+			PRIMARY KEY (user_id, conversation_id)
+		) WITHOUT ROWID`},
+	{"0080_messaging_mail_due_idx",
+		`CREATE INDEX IF NOT EXISTS messaging_mail_due_at ON messaging_mail_due(due_at, user_id)`},
 }
 
 func (db *DB) migrate(ctx context.Context) error {

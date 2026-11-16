@@ -133,6 +133,7 @@ func main() {
 	healthcheck := flag.Bool("healthcheck", false,
 		"ask the running server on -addr whether it is healthy, exit 0 or 1, and stop (for container health checks)")
 	backupDir := flag.String("backup-dir", "", "where database snapshots and the file mirror go (default: backups/ beside the database)")
+	digestMinute := flag.Duration("mail-digest-minute", time.Minute, "the length of one minute of a missed-activity email period; only a test harness changes it")
 	backupEvery := flag.Duration("backup-every", 6*time.Hour, "how often the running server snapshots itself; 0 turns scheduled backups off")
 	backupKeep := flag.Int("backup-keep", 28, "how many database snapshots to keep (with -backup-every 6h, a week)")
 	backupNow := flag.Bool("backup-now", false, "take one backup of -db now (beside a running server is fine), print where, and stop")
@@ -478,7 +479,7 @@ func main() {
 		messagingModule.Service.UseNotifier(notifyModule.Service)
 	}
 	// Outgoing email, through whatever SMTP server the operator names.
-	var mailQueue *mail.Queue
+	var mailQueue, digestQueue *mail.Queue
 	switch {
 	case smtpCfg == nil:
 		log.Info("email: off (no -smtp-addr): password reset is not offered")
@@ -490,6 +491,14 @@ func main() {
 		// Sign-up proves the address before an account exists (signup.go).
 		identityModule.Service.SendVerify = verifySender(mailQueue, linkBase)
 		identityModule.Service.SendSignupNotice = noticeSender(mailQueue, linkBase)
+		// Missed-activity email has a queue of its own: a morning's worth of
+		// digests must not be what makes a password reset wait or be dropped.
+		digestQueue = mail.NewQueue(smtpCfg, log)
+		messagingModule.Service.Mail = func(to, subject, body string) bool {
+			return digestQueue.Enqueue(mail.Message{To: to, Subject: subject, Body: body})
+		}
+		messagingModule.Service.MailLink = linkBase
+		messagingModule.Service.MailUnit = *digestMinute
 		log.Info("email: on", "server", *smtpAddr, "from", *smtpFrom, "links", linkBase)
 	}
 	// And the other half of that policy: whether a conversation may cross the
@@ -799,8 +808,14 @@ func main() {
 	if metricsSrv != nil {
 		_ = metricsSrv.Shutdown(shutdownCtx)
 	}
+	// The links first (a reset somebody is waiting for), then the digests:
+	// if the process is killed before the second queue drains, what is lost
+	// is a summary of messages that are still there, unread.
 	if mailQueue != nil {
 		mailQueue.Close()
+	}
+	if digestQueue != nil {
+		digestQueue.Close()
 	}
 	if err := k.Stop(shutdownCtx); err != nil {
 		log.Error("shutdown errors", "err", err)

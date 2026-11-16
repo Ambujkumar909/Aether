@@ -38,7 +38,7 @@ func TestNotificationSettingsAreValidatedAndMine(t *testing.T) {
 	if got, _ := s.NotifyPrefsOf(ctx, me); got != def {
 		t.Fatalf("a refused setting was stored: %+v", got)
 	}
-	want := NotifyPrefs{Direct: NotifyQuiet, Group: NotifyQuiet, Mention: NotifyQuiet, Reply: NotifyOff, Reaction: NotifyOff, Preview: false}
+	want := NotifyPrefs{Direct: NotifyQuiet, Group: NotifyQuiet, Mention: NotifyQuiet, Reply: NotifyOff, Reaction: NotifyOff, Preview: false, Email: "off"}
 	if got, err := s.SetNotifyPrefs(ctx, me, want); err != nil || got != want {
 		t.Fatalf("every lowest level at once: %+v err=%v", got, err)
 	}
@@ -227,7 +227,7 @@ func TestNotificationSettingsDecideTheFeed(t *testing.T) {
 	clear()
 
 	// Quiet writes the row all the same.
-	if _, err := s.SetNotifyPrefs(ctx, you, NotifyPrefs{Direct: NotifyQuiet, Group: NotifyQuiet, Mention: NotifyQuiet, Reply: NotifyQuiet, Reaction: NotifyQuiet, Preview: true}); err != nil {
+	if _, err := s.SetNotifyPrefs(ctx, you, NotifyPrefs{Direct: NotifyQuiet, Group: NotifyQuiet, Mention: NotifyQuiet, Reply: NotifyQuiet, Reaction: NotifyQuiet, Preview: true, Email: "off"}); err != nil {
 		t.Fatal(err)
 	}
 	act()

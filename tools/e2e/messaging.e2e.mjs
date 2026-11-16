@@ -1143,18 +1143,21 @@ await section('out of office: a bounded line with a window, shown to peers only 
 
 await section('notification settings: a closed set per kind, mine alone, carried on the list, and off keeps a row out of the feed', async () => {
   const def = (await A.get('/api/messaging/notify')).json.notify;
-  eq(def, { direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true }, 'with nothing chosen: the defaults');
+  eq(def, { direct: 'alert', group: 'alert', mention: 'alert', reply: 'alert', reaction: 'quiet', preview: true, email: 'off' }, 'with nothing chosen: the defaults, and no email');
+  eq((await A.get('/api/messaging/notify')).json.emailOffered, true, 'the server says it can send mail, so the page may offer a period');
   for (const [why, change] of [
     ['a direct chat cannot be off', { direct: 'off' }],
     ['a group cannot be off', { group: 'off' }],
     ['a mention cannot be off', { mention: 'off' }],
     ['a reaction cannot alert', { reaction: 'alert' }],
     ['a level nobody defined', { reply: 'loud' }],
+    ['an email period nobody defined', { email: 'weekly' }],
+    ['an email period left empty', { email: '' }],
   ]) eq((await A.put('/api/messaging/notify', { ...def, ...change })).status, 400, why);
   eq((await A.put('/api/messaging/notify', { direct: 'quiet' })).status, 400, 'a setting with fields left out is refused whole');
   eq((await A.get('/api/messaging/notify')).json.notify, def, 'nothing refused was stored');
 
-  const mine = { direct: 'quiet', group: 'alert', mention: 'alert', reply: 'off', reaction: 'off', preview: false };
+  const mine = { direct: 'quiet', group: 'alert', mention: 'alert', reply: 'off', reaction: 'off', preview: false, email: 'daily' };
   eq((await A.put('/api/messaging/notify', mine)).json.notify, mine, 'set, and answered with what was stored');
   eq((await A.get('/api/messaging/notify')).json.notify, mine, 'read back');
   eq((await A.get('/api/messaging/conversations')).json.notify, mine, 'carried on my conversation list, so every device of mine reads it');

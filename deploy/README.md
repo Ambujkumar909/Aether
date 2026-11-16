@@ -105,8 +105,9 @@ docker compose start aether
 
 ## Email
 
-Mail does two things: password reset, and proving an address at sign-up --
-with mail configured, open sign-up creates an account only once the emailed
+Mail does three things: password reset, proving an address at sign-up, and
+the missed-activity email a person may turn on for themselves. With mail
+configured, open sign-up creates an account only once the emailed
 link is opened with the password chosen (a stranger cannot register your
 colleagues' addresses). Without mail, sign-up stays immediate, except that
 addresses in the organisation's own domains must be created by an
@@ -121,6 +122,12 @@ page does not offer reset.
 
 A link works once, for 30 minutes; asking again replaces it, and one account
 is sent at most one a minute. Using it ends every session the account had.
+
+The missed-activity email is off for everyone until they choose a period on
+their account page (every 10 minutes, hourly, every 8 hours, daily); the
+choice is not shown at all on a server without mail. A person is sent at most
+one email a period, only when Aether was closed and something is still unread.
+These go through a queue of their own, so they never delay a reset link.
 
 ## Single sign-on
 

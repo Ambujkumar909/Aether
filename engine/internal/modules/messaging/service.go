@@ -39,6 +39,15 @@ type Service struct {
 	// notifier reaches members with no socket open (UseNotifier); nil
 	// means they are not reached.
 	notifier Notifier
+	// Mail queues one plain-text email and reports whether it was taken;
+	// MailLink is the address the email points back to. Injected by main
+	// when a mail server is configured. Nil means no missed-activity email:
+	// nothing is recorded for one and the setting is not offered.
+	Mail     func(to, subject, body string) bool
+	MailLink string
+	// MailUnit is the length of one minute of an email period. Zero means a
+	// minute; a harness that cannot wait ten of them sets it shorter.
+	MailUnit time.Duration
 	// MayMessage reports whether one address may open a conversation with
 	// another. Injected from identity, which owns the organisation policy, so
 	// this module does not import it. Nil means no restriction, which is the
@@ -391,8 +400,12 @@ func (s *Service) pushOnce(ctx context.Context, a Actor, convID, messageID strin
 // Each person's notification settings then decide (notifyprefs.go): the
 // kind the message falls under for them must be set to alert, unless it is
 // urgent; and with previews off the notice says who and where, not what.
+//
+// Whoever is pushed to is also, if they chose an email period, noted as
+// having something waiting (maildigest.go): the same people, by the same
+// decision, in one statement for the whole message.
 func (s *Service) notifyAbsent(ctx context.Context, convID string, m *Message, ids []string) {
-	if s.notifier == nil || m == nil {
+	if (s.notifier == nil && s.Mail == nil) || m == nil {
 		return
 	}
 	// Who is not here at all. Usually nobody, and then nothing below runs.
@@ -424,6 +437,13 @@ func (s *Service) notifyAbsent(ctx context.Context, convID string, m *Message, i
 	}
 	urgent, direct := m.Priority == "urgent", conv.Kind == KindDirect
 	prefs := s.notifyPrefsOf(ctx, absent)
+	var due []mailDue
+	now := time.Now().UnixMilli()
+	defer func() {
+		if err := s.repo.AddMailDue(ctx, due); err != nil {
+			s.log.Warn("mail digest: could not note", "err", err)
+		}
+	}()
 	for _, id := range absent {
 		if muted[id] {
 			continue
@@ -434,6 +454,12 @@ func (s *Service) notifyAbsent(ctx context.Context, convID string, m *Message, i
 		}
 		p := prefs(id)
 		if !urgent && p.level(named, replied, direct) != NotifyAlert {
+			continue
+		}
+		if every := emailPeriods[p.Email]; every > 0 && s.Mail != nil {
+			due = append(due, mailDue{userID: id, convID: convID, dueAt: now + int64(every)*s.mailUnit().Milliseconds()})
+		}
+		if s.notifier == nil {
 			continue
 		}
 		title := m.SenderName

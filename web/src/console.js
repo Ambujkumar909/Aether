@@ -612,6 +612,17 @@ async function renderAccount() {
              .join('')}
          </div>
          <label class="np-preview"><span>Show the words of a message in a notification</span><span class="switch"><input type="checkbox" id="np-preview" disabled /><span></span></span></label>
+         <div class="np-email" id="np-email-row" hidden>
+           <label class="np-row"><span>Email me about what I missed</span>
+             <select class="input" id="np-email" disabled>
+               <option value="off">Off</option>
+               <option value="10m">Every 10 minutes</option>
+               <option value="hourly">Every hour</option>
+               <option value="8h">Every 8 hours</option>
+               <option value="daily">Once a day</option>
+             </select></label>
+           <p class="hint">One email at most in that time, to the address you sign in with, and only when Aether is closed and something that would have alerted you is still unread.</p>
+         </div>
          <p class="np-state" id="np-state" role="status">Checking…</p>
        </div>
        <div class="card" id="sounds-card">
@@ -748,6 +759,7 @@ async function renderAccount() {
   // anything can be changed; every change is sent whole and what the server
   // stored is what is shown.
   const npKinds = ['direct', 'group', 'mention', 'reply', 'reaction'];
+  let npOffered = false;
   const npShow = (p) => {
     for (const k of npKinds) {
       const sel = document.getElementById('np-' + k);
@@ -758,6 +770,12 @@ async function renderAccount() {
     const pv = document.getElementById('np-preview');
     pv.checked = !!p.preview;
     pv.disabled = false;
+    // The email period is offered only by a server that can send mail. The
+    // control holds what is stored either way, so a save never changes it.
+    const em = document.getElementById('np-email');
+    em.value = p.email || 'off';
+    em.disabled = false;
+    document.getElementById('np-email-row').hidden = !npOffered;
     // The open chat follows at once; other devices read it with their list.
     window.dispatchEvent(new CustomEvent('aether:notify-prefs', { detail: p }));
     return true;
@@ -765,15 +783,16 @@ async function renderAccount() {
   const npRead = async (words) => {
     const line = document.getElementById('np-state');
     try {
-      const p = (await messaging.notifyPrefs()).notify;
-      if (npShow(p) && line) line.textContent = words;
+      const res = await messaging.notifyPrefs();
+      npOffered = !!res.emailOffered;
+      if (npShow(res.notify) && line) line.textContent = words;
     } catch {
       if (line) line.textContent = 'Could not read your notification settings.';
     }
   };
   npRead('');
   const npSave = async () => {
-    const p = { preview: document.getElementById('np-preview').checked };
+    const p = { preview: document.getElementById('np-preview').checked, email: document.getElementById('np-email').value };
     for (const k of npKinds) p[k] = document.getElementById('np-' + k).value;
     try {
       npShow((await messaging.setNotifyPrefs(p)).notify);
@@ -785,6 +804,7 @@ async function renderAccount() {
   };
   for (const k of npKinds) document.getElementById('np-' + k).onchange = npSave;
   document.getElementById('np-preview').onchange = npSave;
+  document.getElementById('np-email').onchange = npSave;
 
   // Sounds: the level is this browser's, remembered; the buttons play once.
   const lvl = document.getElementById('sounds-level');

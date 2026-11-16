@@ -44,6 +44,9 @@ func (m *Module) Start(ctx context.Context, k *modular.Kernel) error {
 	// process; it stops with the kernel's context.
 	go m.Service.RunScheduler(ctx)
 	go m.Service.RunAutoStatus(ctx, 15*time.Second)
+	if m.Service.Mail != nil {
+		go m.Service.RunMailDigest(ctx)
+	}
 	// The search index is refilled once if a migration emptied it.
 	if n, err := m.Service.repo.ReindexIfNeeded(ctx); err != nil {
 		m.Service.log.Warn("search index rebuild failed", "err", err)

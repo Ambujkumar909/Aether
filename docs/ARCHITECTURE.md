@@ -6229,7 +6229,8 @@ set quiet still alerts, and is silenced only by the mention setting.
 
 Three rules hold it together. **A setting only takes away**: the defaults
 are what Aether did before, and nothing here causes a notice that would not
-otherwise have been sent. **Urgent messages and calls are not settings**:
+otherwise have been sent. (The one exception came later and starts
+off: the email period, 6cc.) **Urgent messages and calls are not settings**:
 they come through whatever is set (do not disturb and quiet hours keep
 their own rules for those). **It is enforced where the notice is made, not
 where it is offered**:
@@ -6300,6 +6301,153 @@ reactions off.
 
 **Not built.** A level per conversation between everything and muted
 (Teams' "mentions and replies"): mute stays as it is, deliberately silent
-to push. Missed-activity email. A "meeting started" notice (Aether sends
-none to configure). Notify me when a person becomes available. Pushing a
-change to a person's other devices.
+to push. A "meeting started" notice (Aether sends none to configure).
+Notify me when a person becomes available. Pushing a change to a person's
+other devices. (The missed-activity email came next: 6cc.)
+
+### 6cc. Phase 2, part 4: the missed-activity email -- the push's slower twin, written when it is sent
+
+**What Teams does, read from its package.** A setting, "Missed activity
+emails", with six values (`missedActivityEmailDelayOptions`: as soon as
+possible, every 10 minutes, hourly, every 8 hours, daily, off; default
+hourly). The function is kept. Two things are Aether's own: it starts
+**off**, and there is no "as soon as possible".
+
+Off, because it is the one notification setting that adds a notice instead
+of taking one away (6cb), and it adds it outside the product, in a mailbox,
+to an address that on an open sign-up server belongs to a member of the
+public. Nobody is written to until they ask. No "as soon as possible",
+because that is what the push notification is; an email per message is the
+one-frame-per-packet mistake again, at SMTP's prices (below).
+
+**What counts as missed** is exactly what would have been pushed: a direct
+message, a mention, a reply to something you wrote, an urgent message, to a
+person with no socket open; never a muted conversation, never a kind set
+quiet. It is not a second decision that could drift from the first: it is
+one more line in `notifyAbsent`, after the push's own test and before the
+push. A plain message in a group is not pushed and is not mailed.
+
+**What is stored is only that something waits.** `messaging_mail_due`: one
+row per person and conversation, with the time their next email may go. The
+first thing missed starts the clock (`INSERT OR IGNORE`: more of the same
+does not move it), one statement for all the recipients of a message. No
+words, no counts, no message ids.
+
+**What the email says is read when it is written.** When a row comes due
+the loop takes all of that person's rows (`DELETE ... RETURNING`, so a
+message arriving in the same instant either is in this email's count or
+starts the next period, never neither) and reads, for those conversations,
+the unread count the badge shows and the newest unread message from
+somebody else, through the membership row. So:
+
+- read in the meantime: nothing to say, nothing sent;
+- a message taken back: not quoted, not counted;
+- left the conversation, or muted it since: not in the email;
+- turned the setting off since: what waited is not sent.
+
+One email covers everything waiting; ten conversations are listed and the
+rest counted. With previews off (6cb) it says who and how many, not what:
+the same switch, because it is the same question (may the words leave the
+server). After it, nothing more is sent until something new is missed: an
+unread message is mailed about once.
+
+**Other people's words inside our email.** A name, a title and a message
+are written by somebody else and land in an email from the server's
+address. Each is folded to one line (so it cannot imitate the lines around
+it: a second "Open Aether:" line, a fake footer), stripped of control
+characters and of the Unicode direction overrides (which make `exe.txt`
+read as `txt.exe`), cut to 80 or 140 characters, and the message is
+indented and quoted. The subject is constant: nothing a stranger typed is
+ever a header. A link in a message is left as it was written; the person
+would see the same link in the chat, from the same sender, and the email
+says who wrote it.
+
+**Bounded.** Rows by a person's memberships. A tick by 200 people. An email
+by ten lines. The queue by its own 256, and it is a queue of its own: a
+morning's digests cannot be what makes a password reset wait or be dropped,
+and at shutdown the links are flushed first. When the queue refuses, the
+rows go back, due at once, and the tick stops. A send that fails after
+that is logged and lost (a summary of messages that are still there).
+The ceiling is one sender on one connection per email: a deployment where
+far more than 200 people come due each minute sends late, in order, and
+loses nothing.
+
+**At 50,000** (`TestEmailAtScaleIsIndexReads`, 50,000 people with
+something waiting): a tick with nothing due is one index read, 10 µs; a
+tick that finds a full batch of 200 due, 63 µs; reading one person's email
+(40 unread in a conversation), 56 µs. The plan test refused the first form
+of the tick's query: asked for distinct people with no order, the planner
+walked the whole table by its primary key rather than use the due-time
+index. It is now ordered by due time (longest overdue first, which is also
+the fair order) and made distinct in Go.
+
+**On the wire (tshark, loopback, IPv4; `tools/e2e/measure-digest.mjs`).**
+Nothing is added to any socket. The setting is 14 B in the settings body
+(`,"email":"off"`), which the conversation list already carries (6cb). The
+cost is the email itself: one SMTP conversation to the mail server, over
+STARTTLS, as production sends it. One email about two missed messages in
+one conversation, 299 B of text:
+
+| Part of the conversation | Bytes | Share of the wire |
+| --- | --- | --- |
+| 54 frames of loopback, IP and TCP header (44 B each, 24 B of options) | 2,400 | 31.8% |
+| TLS hellos (client 1,483 B: Go offers a post-quantum key share; server 1,880 B with its certificate) | 3,363 | 44.6% |
+| SMTP before and after the message (greeting, two EHLOs, STARTTLS, AUTH, MAIL, RCPT, DATA, QUIT, and their answers) | 1,135 | 15.0% |
+| The message: headers and body in one 647 B record | 647 | 8.6% |
+| **Whole conversation, 23 segments carrying data** | **7,545** | |
+
+So the text a person reads is **4.0%** of what crossed the wire, and the
+whole message 8.6%. That is the worst efficiency recorded in this document
+and it is the protocol's, not the encoding's: a fresh TCP and TLS session
+per message is what SMTP submission is. It is also the measurement behind
+two decisions. An email per missed message ("as soon as possible") would
+have paid the 6,898 B of ceremony for each one; the digest pays it once a
+period however much was missed, and a ten-conversation email is the same
+conversation with a few hundred more bytes in one record. And it starts
+off: 7.5 kB to a third party's server is not something to spend on a
+person who did not ask. For comparison, the push for one message is about
+800 B in one request (6bz), which is why the push stays the immediate
+channel and this one the slow one.
+
+Idle is zero: in four seconds with a period chosen and nothing missed the
+loop ticked thirteen times and no frame crossed either port; in the four
+seconds after the email, with the messages still unread, none did either.
+Not measured: a real provider across the internet (more round trips'
+worth of latency, the same bytes), and the reuse of one connection for
+several emails, which is not built.
+
+**Proof.** Five Go tests: the period is a closed set, starts off, and the
+database holds the same set; who is noted (the push's people, and only
+those with a period: not the connected, the muted, a quiet kind; urgent
+always; nobody without a mail server, though the push still goes); what
+the email says once a period (unread then, newest first, the deleted not
+quoted, previews, turned off or muted since, a full queue losing nothing,
+an account that is gone, two people in one tick); that other people's
+words cannot change its shape; the loop on a 20 ms minute, and that it
+stops. Thirty-six planted faults, all caught. Running the tests five
+times over found what one run had not: two messages in the same
+millisecond, and the email quoted the earlier (no tiebreak on the newest
+unread; two runs in five). It is settled by rowid now, as everywhere else.
+`digest.e2e.mjs`, two browsers, the server's own loop and a real SMTP
+server it is read back from (25 checks): the control is offered, saved,
+there after a reload, 44 px on a phone; nothing before the period ends,
+then one email with the sender, the count and the newest words, marked
+`Auto-Submitted`; no second one; read in the meantime, none; previews off,
+no words; present, none. `messaging.e2e.mjs`: two more refusals (a period
+nobody defined, an empty one) and that the server says whether it can
+send mail.
+
+**Found on the way, older than this work.** The harness ends with a message
+left unread, and the next run of the visual audit failed on it in the dark
+theme at all three widths: the count on the "Unread" filter and the "@"
+badge on a conversation were the fixed light ink (`--on-solid`) on the
+brand green, 3.11:1 where 4.5 is needed. Nothing had been unread when the
+audit last looked at that screen. Both now use `--brand-ink`, the ink each
+theme defines for that ground; the audit passes (354 checks) and the layout
+audit with the new row in the account page is unchanged (602).
+
+**Not built.** "As soon as possible". Missed calls, team adds and
+reactions in the email. A one-click unsubscribe link (the email says where
+the setting is; it is opt-in). A retry when the mail server refuses a
+message that was already taken from the queue. One connection for several
+emails. HTML: it is plain text.

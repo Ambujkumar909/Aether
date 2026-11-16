@@ -1,6 +1,45 @@
 # Resume here — Teams parity work
 
-## Start here (handoff, 2026-11-15)
+## Start here (handoff, 2026-11-16)
+
+**Phase 2 continues.** Done on 2026-11-16: the **missed-activity email**
+(ARCHITECTURE 6cc).
+
+- `messaging/maildigest.go`, table `messaging_mail_due`, one more field
+  (`email`: off, 10m, hourly, 8h, daily; off by default) on the settings of
+  6cb. A row is noted in `notifyAbsent` for whoever would be pushed to and
+  chose a period; `RunMailDigest` (started only when a mail server is
+  configured) takes a person's rows when one comes due and writes the email
+  from what is unread then. The mail goes through a queue of its own
+  (`digestQueue` in `cmd/aether/main.go`).
+- `-mail-digest-minute` shortens a minute of a period; both runners pass
+  `300ms`, so "every 10 minutes" is three seconds in `digest.e2e.mjs` (in
+  the CI list). `tools/e2e/measure-digest.mjs` is the capture: one email is
+  54 frames and 7,545 B for 299 B of text.
+- Gates run locally: the Windows `-race` suite (all 24 packages, relay
+  included today), web unit tests (243), the browser harnesses digest,
+  notify, messaging, push, console, layout, visual, ooo, activity, and the
+  Linux test stage.
+
+**Next, in order:** server-side speaker selection, data export and deletion;
+then the security phase (which should include reporting a message or a
+person to an administrator, a challenge before an anonymous join, and the
+email's place in the threat model: other people's words in mail from the
+server's address) and Phase 4 as below.
+
+Gotchas from today:
+
+- `tools/mutate.py` buffers its output and a `go test | tail && mutate`
+  chain runs the second half whatever the tests said (the pipe's status is
+  tail's). While it runs it is rewriting source files: do not run tests or
+  build a binary until it has reported.
+- Run a new test five or more times before trusting it. One run of the
+  digest tests passed with two messages in the same millisecond quoted in
+  the wrong order; two runs in five did not.
+- A query for distinct values with a LIMIT and no ORDER BY may walk the
+  table by its key instead of the index the WHERE names; check the plan.
+
+## Earlier handoff (2026-11-15)
 
 **Phase 2 continues.** Done on 2026-11-15, CI green on the last commit
 (`e4d59ca`: go, web, browser, container):
@@ -37,12 +76,6 @@ layout (602 checks) and visual (354).
   on the account page. `tools/e2e/notify.e2e.mjs` (in the CI list),
   `tools/e2e/measure-notify.mjs`, sections in `push.e2e.mjs` and
   `messaging.e2e.mjs`. A reply to you in a group is now pushed.
-
-**Next, in order:** missed-activity email (the scheduler and SMTP exist;
-Teams' options are in `docs/TEAMS_FUNCTIONS.md`), server-side speaker
-selection, data export and deletion; then the security phase (which should
-include reporting a message or a person to an administrator and a challenge
-before an anonymous join) and Phase 4 as below.
 
 Gotchas from today:
 

@@ -7,10 +7,13 @@ set -u
 BIN=${BIN:-/tmp/aether}
 WORK=$(mktemp -d)
 fails=0
-# Email on, through a real SMTP server, as in production.
+# Email on, through a real SMTP server, as in production. A minute of a
+# missed-activity email period is 300 ms here, so "every 10 minutes" is three
+# seconds (digest.e2e.mjs); nothing else is shortened.
 bash tools/e2e/mailpit.sh start
 MAIL=(-smtp-addr 127.0.0.1:1025 -smtp-from noreply@aether.test -smtp-user aether -smtp-password e2e
   -smtp-ca tools/e2e/.mail/cert.pem -public-url https://localhost:9443
+  -mail-digest-minute 300ms
   -sso-issuer http://127.0.0.1:9460 -sso-client-id e2e-idp -sso-client-secret e2e-idp-secret
   -sso-name "Example Org" -sso-domains example.test
   -signup-check-mail=false -signup-block-domains tools/e2e/blocked-domains.txt -signup-per-address 20
